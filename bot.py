@@ -2,10 +2,10 @@ import discord
 from discord.ext import commands
 from PIL import Image
 import io
-from datetime import datetime
 import os
+from datetime import datetime
 
-# Configuration des intents
+# --- Configuration des intents ---
 intents = discord.Intents.default()
 intents.members = True
 
@@ -15,11 +15,11 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 ID_BIENVENUE = 1512009964988661861
 ID_AUREVOIR  = 1512010175907631104
 
-# --- Chemins des images de fond ---
+# --- Chemins relatifs des images (dans le même dossier que bot.py) ---
 FOND_BIENVENUE = "IMG_1299.png"
 FOND_AUREVOIR  = "IMG_1319.png"
 
-# --- Fonction pour ajouter une bordure noire à une image ---
+# --- Fonction pour ajouter une bordure noire autour d'une image ---
 def ajouter_bordure(image_bytes: bytes, bordure_px: int = 15) -> bytes:
     img = Image.open(io.BytesIO(image_bytes))
     img_bordure = Image.new("RGB", (img.width + 2*bordure_px, img.height + 2*bordure_px), (0,0,0))
@@ -34,7 +34,7 @@ async def lire_image(fond_path: str) -> bytes:
     with open(fond_path, "rb") as f:
         return f.read()
 
-# --- Événement quand le bot est prêt ---
+# --- Événement de démarrage ---
 @bot.event
 async def on_ready():
     print(f"✅ {bot.user} est en ligne !")
@@ -47,22 +47,21 @@ async def on_member_join(member):
         print("Salon de bienvenue introuvable")
         return
 
-    # Lecture de l'image de fond
+    # Lire l'image de fond et ajouter la bordure
     image_bytes = await lire_image(FOND_BIENVENUE)
-    image_avec_bordure = ajouter_bordure(image_bytes, bordure_px=15)
+    image_avec_bordure = ajouter_bordure(image_bytes)
 
-    # Message personnalisé avec le pseudo
-    texte_bienvenue = (f"Oh ! **{member.display_name}** est un/une potentiel(le) dessinateur/rice et a rejoint ce serveur, "
-                       f"bonne visite !")
+    # Message de bienvenue avec le pseudo
+    texte = (f"Oh ! **{member.display_name}** est un/une potentiel(le) dessinateur/rice et a rejoint ce serveur, "
+             f"bonne visite !")
 
-    # Création de l'embed (cadre noir)
+    # Embed noir avec avatar en thumbnail
     embed = discord.Embed(
         title="🎨 Bienvenue !",
-        description=texte_bienvenue,
+        description=texte,
         color=0x000000,
         timestamp=datetime.now()
     )
-    # Miniature : avatar du membre
     embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
 
     # Envoi du message (embed + image attachée)
@@ -77,14 +76,14 @@ async def on_member_remove(member):
         return
 
     image_bytes = await lire_image(FOND_AUREVOIR)
-    image_avec_bordure = ajouter_bordure(image_bytes, bordure_px=15)
+    image_avec_bordure = ajouter_bordure(image_bytes)
 
-    texte_aurevoir = (f"Oh... **{member.display_name}**, un/une potentiel(le) dessinateur/rice, a quitté ce serveur, "
-                      f"en espérant que tu deviendras un(e) artiste.")
+    texte = (f"Oh... **{member.display_name}**, un/une potentiel(le) dessinateur/rice, a quitté ce serveur, "
+             f"en espérant que tu deviendras un(e) artiste.")
 
     embed = discord.Embed(
         title="👋 Au revoir...",
-        description=texte_aurevoir,
+        description=texte,
         color=0x000000,
         timestamp=datetime.now()
     )
@@ -92,7 +91,7 @@ async def on_member_remove(member):
 
     await canal.send(embed=embed, file=discord.File(io.BytesIO(image_avec_bordure), filename="goodbye.png"))
 
-# --- Lancement du bot avec lecture sécurisée du token ---
+# --- Lancement du bot avec lecture du token depuis une variable d'environnement ---
 if __name__ == "__main__":
     token = os.getenv("DISCORD_TOKEN")
     if not token:
