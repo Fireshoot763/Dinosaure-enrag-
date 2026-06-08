@@ -9,7 +9,7 @@ from aiohttp import web
 import time
 import re
 
-# ------------------ ANTI-SPAM COMMANDES ------------------
+# ------------------ ANTI-SPAM POUR LA COMMANDE !ping ------------------
 command_cooldown = {}
 COOLDOWN_SECONDS = 5
 
@@ -24,32 +24,33 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# IDs des salons
+# IDs des salons (vérifie qu'ils sont corrects)
 ID_BIENVENUE = 1512009964988661861
-ID_AUREVOIR  = 1512010175907631104
+ID_AUREVOIR = 1512010175907631104
 VIDEO_CHANNEL_ID = 1513174573632454817
-LOG_CHANNEL_ID  = 1512010693665099876   # Salon pour les logs généraux
+LOG_CHANNEL_ID = 1512010693665099876
 
 AUTHORIZED_USER_ID = 1274426216413139007
 
 FOND_BIENVENUE = "IMG_1299.png"
-FOND_AUREVOIR  = "IMG_1319.png"
+FOND_AUREVOIR = "IMG_1319.png"
 
 # ------------------ FONCTION DE LOG VERS DISCORD ------------------
 async def send_log(message: str):
-    """Envoie un message dans le salon de logs."""
+    """Envoie un message texte dans le salon de logs (sans bloquer le bot)."""
     channel = bot.get_channel(LOG_CHANNEL_ID)
     if channel:
         try:
+            # Troncature si trop long
             if len(message) > 1990:
                 message = message[:1990] + "..."
             await channel.send(f"📋 {message}")
         except Exception as e:
-            print(f"Erreur lors de l'envoi du log : {e}")
+            print(f"Erreur d'envoi du log Discord : {e}")
     else:
-        print(f"Salon de logs introuvable (ID {LOG_CHANNEL_ID})")
+        print(f"Salon logs introuvable (ID {LOG_CHANNEL_ID})")
 
-# ------------------ SERVEUR HTTP ------------------
+# ------------------ SERVEUR HTTP POUR RENDER ------------------
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -60,10 +61,11 @@ async def start_http_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
-    print("✅ Serveur HTTP démarré sur le port 8080")
+    print("✅ Serveur HTTP sur le port 8080")
+    # On attend indéfiniment (le serveur tourne en fond)
     await asyncio.Event().wait()
 
-# ------------------ IMAGES ------------------
+# ------------------ FONCTIONS POUR LES IMAGES ------------------
 def ajouter_bordure(image_bytes: bytes, bordure_px: int = 15) -> bytes:
     img = Image.open(io.BytesIO(image_bytes))
     img_bordure = Image.new("RGB", (img.width + 2*bordure_px, img.height + 2*bordure_px), (0,0,0))
@@ -131,7 +133,7 @@ async def on_member_remove(member):
         await send_log(f"⚠️ Erreur au revoir pour {member.name} : {e}")
         print(f"Erreur au revoir: {e}")
 
-# ------------------ REDIRECTION VIDÉOS ------------------
+# ------------------ REDIRECTION DES LIENS VIDÉO ------------------
 @bot.listen('on_message')
 async def on_message_listener(message):
     if message.author == bot.user:
@@ -144,10 +146,12 @@ async def on_message_listener(message):
         video_channel = bot.get_channel(VIDEO_CHANNEL_ID)
         if video_channel:
             await video_channel.send(f"📹 **{message.author.display_name}** a partagé :\n{message.content}")
+            # Option : log seulement si besoin (décommente si tu veux)
+            # await send_log(f"Vidéo redirigée : {message.content}")
         else:
             await send_log(f"❌ Salon vidéo introuvable (ID {VIDEO_CHANNEL_ID})")
 
-# ------------------ COMMANDE PING AVEC ANTI-SPAM ------------------
+# ------------------ COMMANDE !ping (avec anti-spam) ------------------
 @bot.command()
 async def ping(ctx):
     user_id = ctx.author.id
@@ -159,7 +163,7 @@ async def ping(ctx):
     await ctx.send("Pong !")
     await send_log(f"Commande !ping utilisée par {ctx.author.name} (ID {user_id})")
 
-# ------------------ GESTION DES ERREURS ------------------
+# ------------------ GESTION DES ERREURS DE COMMANDE ------------------
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -172,19 +176,21 @@ async def on_command_error(ctx, error):
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user} (ID: {bot.user.id})")
     print(f"📡 Serveurs : {[guild.name for guild in bot.guilds]}")
-    await send_log(f"🚀 Bot démarré (version corrigée)")
+    await send_log("🚀 Bot démarré (version finale sans duplication)")
 
-    # Vérification des salons
+    # Vérification des salons (affichage console)
     for guild in bot.guilds:
         for channel in guild.text_channels:
             if channel.id in (ID_BIENVENUE, ID_AUREVOIR, VIDEO_CHANNEL_ID, LOG_CHANNEL_ID):
                 print(f"🔗 Salon trouvé : #{channel.name} (ID {channel.id})")
 
+# ------------------ LANCEMENT ------------------
 async def main():
+    # Lance le serveur HTTP pour Render
     asyncio.create_task(start_http_server())
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        print("❌ Token manquant")
+        print("❌ Token Discord manquant dans les variables d'environnement")
         return
     await bot.start(token)
 
