@@ -19,11 +19,11 @@ SPAM_SECONDS = 10
 # ------------------ CONFIGURATION ------------------
 intents = discord.Intents.default()
 intents.members = True
-intents.message_content = True
+intents.message_content = True  # Nécessaire pour lire les messages (commandes !)
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# IDs des salons
+# IDs des salons (vérifie qu'ils sont corrects)
 ID_BIENVENUE = 1512009964988661861
 ID_AUREVOIR = 1512010175907631104
 VIDEO_CHANNEL_ID = 1513174573632454817
@@ -42,7 +42,7 @@ async def send_log(message: str):
                 message = message[:1990] + "..."
             await channel.send(f"📋 {message}")
         except Exception as e:
-            print(f"Erreur log : {e}")
+            print(f"Erreur log Discord : {e}")
 
 # ------------------ SERVEUR HTTP (NON BLOQUANT) ------------------
 async def handle_health(request):
@@ -116,18 +116,25 @@ async def on_member_remove(member):
     except Exception as e:
         await send_log(f"⚠️ Erreur au revoir : {e}")
 
-# ------------------ REDIRECTION VIDÉOS ------------------
+# ------------------ REDIRECTION VIDÉOS (avec passage des commandes) ------------------
 @bot.listen('on_message')
 async def on_message_listener(message):
-    if message.author == bot.user or message.author.id != AUTHORIZED_USER_ID:
+    # Ne pas traiter les messages du bot
+    if message.author == bot.user:
         return
-    content = message.content.lower()
-    if "youtube.com" in content or "youtu.be" in content or "tiktok.com" in content:
-        video_channel = bot.get_channel(VIDEO_CHANNEL_ID)
-        if video_channel:
-            await video_channel.send(f"📹 **{message.author.display_name}** a partagé :\n{message.content}")
-        else:
-            await send_log(f"❌ Salon vidéo introuvable")
+
+    # Si c'est l'utilisateur autorisé, rediriger les liens vidéo
+    if message.author.id == AUTHORIZED_USER_ID:
+        content = message.content.lower()
+        if "youtube.com" in content or "youtu.be" in content or "tiktok.com" in content:
+            video_channel = bot.get_channel(VIDEO_CHANNEL_ID)
+            if video_channel:
+                await video_channel.send(f"📹 **{message.author.display_name}** a partagé :\n{message.content}")
+            else:
+                await send_log(f"❌ Salon vidéo introuvable")
+
+    # Toujours permettre le traitement des commandes (comme !ping)
+    await bot.process_commands(message)
 
 # ------------------ COMMANDE TEXTE !ping ------------------
 @bot.command()
@@ -157,6 +164,7 @@ async def slash_ping(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user}")
+    # Synchronisation des commandes slash
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
     await send_log("🚀 Bot démarré (avec !ping et /ping)")
