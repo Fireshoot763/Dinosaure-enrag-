@@ -9,33 +9,46 @@ from aiohttp import web
 import time
 import re
 
-# --- CONFIGURATION ---
-
-# Anti-spam bienvenue/départ
+# ------------------ CONFIGURATION ------------------
+# Anti-spam pour les événements join/leave
 recent_joins = {}
 recent_leaves = {}
 SPAM_SECONDS = 10
 
 # Intents Discord
 intents = discord.Intents.default()
-intents.members = True
-intents.message_content = True  # Nécessaire pour lire les liens
+intents.members = True          # Pour détecter les arrivées/départs
+intents.message_content = True  # Pour lire les liens vidéo
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# --- IDs des salons ---
+# IDs des salons (à vérifier sur votre serveur)
 ID_BIENVENUE = 1512009964988661861
 ID_AUREVOIR  = 1512010175907631104
 VIDEO_CHANNEL_ID = 1513174573632454817
+LOG_CHANNEL_ID  = 1512012141312475229   # <-- NOUVEAU : salon pour les logs
 
-# --- ID de la personne autorisée à poster des vidéos ---
-AUTHORIZED_USER_ID = 1274426216413139007   # <- ton ID
+# ID de la personne autorisée à partager des vidéos
+AUTHORIZED_USER_ID = 1274426216413139007
 
-# --- Images de fond (chemins relatifs) ---
+# Chemins des images de fond (dans le même dossier)
 FOND_BIENVENUE = "IMG_1299.png"
 FOND_AUREVOIR  = "IMG_1319.png"
 
-# --- Serveur HTTP factice pour Render ---
+# ------------------ FONCTIONS D'AIDE ------------------
+async def send_log(message: str):
+    """Envoie un message texte dans le salon de logs."""
+    channel = bot.get_channel(LOG_CHANNEL_ID)
+    if channel:
+        try:
+            await channel.send(message)
+            print(f"[LOG] {message}")  # aussi dans la console
+        except Exception as e:
+            print(f"Erreur lors de l'envoi du log : {e}")
+    else:
+        print(f"⚠️ Salon de logs introuvable (ID {LOG_CHANNEL_ID})")
+
+# ------------------ SERVEUR HTTP POUR RENDER ------------------
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -46,10 +59,10 @@ async def start_http_server():
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
-    print("✅ Serveur HTTP sur port 8080")
+    print("✅ Serveur HTTP démarré sur le port 8080")
     await asyncio.Event().wait()
 
-# --- Fonctions pour les images de bienvenue ---
+# ------------------ FONCTIONS POUR LES IMAGES ------------------
 def ajouter_bordure(image_bytes: bytes, bordure_px: int = 15) -> bytes:
     img = Image.open(io.BytesIO(image_bytes))
     img_bordure = Image.new("RGB", (img.width + 2*bordure_px, img.height + 2*bordure_px), (0,0,0))
@@ -63,18 +76,19 @@ async def lire_image(fond_path: str) -> bytes:
     with open(fond_path, "rb") as f:
         return f.read()
 
-# --- Événement de bienvenue ---
+# ------------------ BIENVENUE ------------------
 @bot.event
 async def on_member_join(member):
+    # Anti-spam
     now = time.time()
     if member.id in recent_joins and now - recent_joins[member.id] < SPAM_SECONDS:
-        print(f"🚫 Ignoré doublon bienvenue pour {member.name}")
+        await send_log(f"🚫 Ignoré doublon bienvenue pour {member.name}")
         return
     recent_joins[member.id] = now
 
     canal = bot.get_channel(ID_BIENVENUE)
     if not canal:
-        print(f"❌ Salon bienvenue introuvable (ID {ID_BIENVENUE})")
+        await send_log(f"❌ Salon bienvenue introuvable (ID {ID_BIENVENUE})")
         return
 
     try:
@@ -93,22 +107,22 @@ async def on_member_join(member):
         embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
 
         await canal.send(embed=embed, file=discord.File(io.BytesIO(img_bordure), filename="welcome.png"))
-        print(f"✅ Bienvenue envoyée pour {member.name}")
+        await send_log(f"✅ {member.name} a rejoint le serveur (message envoyé dans #{canal.name})")
     except Exception as e:
-        print(f"⚠️ Erreur bienvenue : {e}")
+        await send_log(f"⚠️ Erreur bienvenue pour {member.name} : {e}")
 
-# --- Événement d'au revoir ---
+# ------------------ AU REVOIR ------------------
 @bot.event
 async def on_member_remove(member):
     now = time.time()
     if member.id in recent_leaves and now - recent_leaves[member.id] < SPAM_SECONDS:
-        print(f"🚫 Ignoré doublon au revoir pour {member.name}")
+        await send_log(f"🚫 Ignoré doublon au revoir pour {member.name}")
         return
     recent_leaves[member.id] = now
 
     canal = bot.get_channel(ID_AUREVOIR)
     if not canal:
-        print(f"❌ Salon au revoir introuvable (ID {ID_AUREVOIR})")
+        await send_log(f"❌ Salon au revoir introuvable (ID {ID_AUREVOIR})")
         return
 
     try:
@@ -127,48 +141,52 @@ async def on_member_remove(member):
         embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
 
         await canal.send(embed=embed, file=discord.File(io.BytesIO(img_bordure), filename="goodbye.png"))
-        print(f"✅ Au revoir envoyé pour {member.name}")
+        await send_log(f"✅ {member.name} a quitté le serveur (message envoyé dans #{canal.name})")
     except Exception as e:
-        print(f"⚠️ Erreur au revoir : {e}")
+        await send_log(f"⚠️ Erreur au revoir pour {member.name} : {e}")
 
-# --- REDIRECTION DES LIENS VIDÉO (YouTube / TikTok) ---
-@bot.event
-async def on_message(message):
-    # Ignorer les messages du bot lui-même
+# ------------------ REDIRECTION VIDÉOS (YouTube/TikTok) ------------------
+@bot.listen('on_message')
+async def on_message_listener(message):
     if message.author == bot.user:
         return
 
-    # Vérifier si l'auteur est la personne autorisée
     if message.author.id != AUTHORIZED_USER_ID:
-        await bot.process_commands(message)
         return
 
-    # Regex pour détecter les URLs YouTube et TikTok
-    url_pattern = re.compile(r'https?://(?:www\.)?(youtube\.com/watch\?v=|youtu\.be/|tiktok\.com/)[^\s]+', re.IGNORECASE)
-    match = url_pattern.search(message.content)
+    # Détection simple des liens YouTube/TikTok
+    content = message.content.lower()
+    is_youtube = "youtube.com" in content or "youtu.be" in content
+    is_tiktok = "tiktok.com" in content
 
-    if match:
+    if is_youtube or is_tiktok:
         video_channel = bot.get_channel(VIDEO_CHANNEL_ID)
         if video_channel:
-            await video_channel.send(f"**{message.author.display_name}** a partagé une vidéo :\n{message.content}")
-            print(f"✅ Vidéo redirigée : {message.content}")
+            await video_channel.send(f"📹 **{message.author.display_name}** a partagé :\n{message.content}")
+            await send_log(f"📹 Lien { 'YouTube' if is_youtube else 'TikTok' } redirigé vers #{video_channel.name} : {message.content}")
         else:
-            print(f"❌ Salon vidéo introuvable (ID {VIDEO_CHANNEL_ID})")
+            await send_log(f"❌ Salon vidéo introuvable (ID {VIDEO_CHANNEL_ID})")
 
-    # Laisser passer les commandes du bot si besoin
-    await bot.process_commands(message)
-
-# --- Démarrage du bot ---
+# ------------------ DÉMARRAGE ------------------
 @bot.event
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user} (ID: {bot.user.id})")
     print(f"📡 Serveurs : {[guild.name for guild in bot.guilds]}")
+    await send_log(f"🚀 Bot démarré (version avec logs)")
+
+    # Vérification des salons (debug)
+    for guild in bot.guilds:
+        for channel in guild.text_channels:
+            if channel.id in (ID_BIENVENUE, ID_AUREVOIR, VIDEO_CHANNEL_ID, LOG_CHANNEL_ID):
+                print(f"🔗 Salon trouvé : #{channel.name} (ID {channel.id})")
 
 async def main():
+    # Lancer le serveur HTTP pour Render
     asyncio.create_task(start_http_server())
+    # Démarrer le bot
     token = os.getenv("DISCORD_TOKEN")
     if not token:
-        print("❌ Token non défini dans l'environnement")
+        print("❌ Erreur : La variable d'environnement DISCORD_TOKEN n'est pas définie.")
         return
     await bot.start(token)
 
