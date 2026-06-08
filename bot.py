@@ -16,12 +16,12 @@ recent_joins = {}
 recent_leaves = {}
 SPAM_SECONDS = 10
 
-# ------------------ CONFIGURATION BOT ------------------
+# ------------------ CONFIGURATION ------------------
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix='!', intents=intents)  # On garde le préfixe pour d'éventuelles autres commandes texte
+bot = commands.Bot(command_prefix='!', intents=intents)
 
 # IDs des salons
 ID_BIENVENUE = 1512009964988661861
@@ -33,7 +33,7 @@ AUTHORIZED_USER_ID = 1274426216413139007
 FOND_BIENVENUE = "IMG_1299.png"
 FOND_AUREVOIR = "IMG_1319.png"
 
-# ------------------ LOGS VERS DISCORD ------------------
+# ------------------ LOGS ------------------
 async def send_log(message: str):
     channel = bot.get_channel(LOG_CHANNEL_ID)
     if channel:
@@ -42,11 +42,9 @@ async def send_log(message: str):
                 message = message[:1990] + "..."
             await channel.send(f"📋 {message}")
         except Exception as e:
-            print(f"Erreur log Discord : {e}")
-    else:
-        print(f"Salon logs introuvable (ID {LOG_CHANNEL_ID})")
+            print(f"Erreur log : {e}")
 
-# ------------------ SERVEUR HTTP ------------------
+# ------------------ SERVEUR HTTP (NON BLOQUANT) ------------------
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -58,7 +56,6 @@ async def start_http_server():
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
     print("✅ Serveur HTTP sur le port 8080")
-    await asyncio.Event().wait()
 
 # ------------------ IMAGES ------------------
 def ajouter_bordure(image_bytes: bytes, bordure_px: int = 15) -> bytes:
@@ -79,46 +76,45 @@ async def lire_image(fond_path: str) -> bytes:
 async def on_member_join(member):
     now = time.time()
     if member.id in recent_joins and now - recent_joins[member.id] < SPAM_SECONDS:
-        await send_log(f"🚫 Ignoré (doublon) arrivée de {member.name}")
+        await send_log(f"🚫 Ignoré doublon arrivée de {member.name}")
         return
     recent_joins[member.id] = now
     canal = bot.get_channel(ID_BIENVENUE)
     if not canal:
-        await send_log(f"❌ Salon bienvenue introuvable (ID {ID_BIENVENUE})")
+        await send_log(f"❌ Salon bienvenue introuvable")
         return
     try:
         img_bytes = await lire_image(FOND_BIENVENUE)
         img_bordure = ajouter_bordure(img_bytes)
-        texte = (f"Oh ! **{member.display_name}** est un/une potentiel(le) dessinateur/rice et a rejoint ce serveur, bonne visite !")
+        texte = f"Oh ! **{member.display_name}** est un/une potentiel(le) dessinateur/rice et a rejoint ce serveur, bonne visite !"
         embed = discord.Embed(title="🎨 Bienvenue !", description=texte, color=0x000000, timestamp=datetime.now())
         embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
         await canal.send(embed=embed, file=discord.File(io.BytesIO(img_bordure), filename="welcome.png"))
-        await send_log(f"✅ {member.name} a rejoint le serveur (message dans #{canal.name})")
+        await send_log(f"✅ {member.name} a rejoint")
     except Exception as e:
-        await send_log(f"⚠️ Erreur bienvenue pour {member.name} : {e}")
+        await send_log(f"⚠️ Erreur bienvenue : {e}")
 
-# ------------------ AU REVOIR ------------------
 @bot.event
 async def on_member_remove(member):
     now = time.time()
     if member.id in recent_leaves and now - recent_leaves[member.id] < SPAM_SECONDS:
-        await send_log(f"🚫 Ignoré (doublon) départ de {member.name}")
+        await send_log(f"🚫 Ignoré doublon départ de {member.name}")
         return
     recent_leaves[member.id] = now
     canal = bot.get_channel(ID_AUREVOIR)
     if not canal:
-        await send_log(f"❌ Salon au revoir introuvable (ID {ID_AUREVOIR})")
+        await send_log(f"❌ Salon au revoir introuvable")
         return
     try:
         img_bytes = await lire_image(FOND_AUREVOIR)
         img_bordure = ajouter_bordure(img_bytes)
-        texte = (f"Oh... **{member.display_name}**, un/une potentiel(le) dessinateur/rice, a quitté ce serveur, en espérant que tu deviendras un(e) artiste.")
+        texte = f"Oh... **{member.display_name}**, un/une potentiel(le) dessinateur/rice, a quitté ce serveur, en espérant que tu deviendras un(e) artiste."
         embed = discord.Embed(title="👋 Au revoir...", description=texte, color=0x000000, timestamp=datetime.now())
         embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
         await canal.send(embed=embed, file=discord.File(io.BytesIO(img_bordure), filename="goodbye.png"))
-        await send_log(f"✅ {member.name} a quitté le serveur (message dans #{canal.name})")
+        await send_log(f"✅ {member.name} a quitté")
     except Exception as e:
-        await send_log(f"⚠️ Erreur au revoir pour {member.name} : {e}")
+        await send_log(f"⚠️ Erreur au revoir : {e}")
 
 # ------------------ REDIRECTION VIDÉOS ------------------
 @bot.listen('on_message')
@@ -131,11 +127,23 @@ async def on_message_listener(message):
         if video_channel:
             await video_channel.send(f"📹 **{message.author.display_name}** a partagé :\n{message.content}")
         else:
-            await send_log(f"❌ Salon vidéo introuvable (ID {VIDEO_CHANNEL_ID})")
+            await send_log(f"❌ Salon vidéo introuvable")
+
+# ------------------ COMMANDE TEXTE !ping ------------------
+@bot.command()
+async def ping(ctx):
+    user_id = ctx.author.id
+    now = time.time()
+    if user_id in command_cooldown and now - command_cooldown[user_id] < COOLDOWN_SECONDS:
+        await ctx.send("⏳ Attends un peu avant de refaire `!ping` !")
+        return
+    command_cooldown[user_id] = now
+    await ctx.send("Pong !")
+    await send_log(f"Commande !ping utilisée par {ctx.author.name}")
 
 # ------------------ COMMANDE SLASH /ping ------------------
 @bot.tree.command(name="ping", description="Vérifie la latence du bot")
-async def ping(interaction: discord.Interaction):
+async def slash_ping(interaction: discord.Interaction):
     user_id = interaction.user.id
     now = time.time()
     if user_id in command_cooldown and now - command_cooldown[user_id] < COOLDOWN_SECONDS:
@@ -143,29 +151,15 @@ async def ping(interaction: discord.Interaction):
         return
     command_cooldown[user_id] = now
     await interaction.response.send_message(f"Pong ! Latence : {round(bot.latency * 1000)}ms")
-    await send_log(f"Commande /ping utilisée par {interaction.user.name} (ID {user_id})")
-
-# ------------------ GESTION DES ERREURS ------------------
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    await send_log(f"❌ Erreur dans la commande `{ctx.command}` : {error}")
+    await send_log(f"Commande /ping utilisée par {interaction.user.name}")
 
 # ------------------ DÉMARRAGE ------------------
 @bot.event
 async def on_ready():
-    print(f"✅ Bot connecté : {bot.user} (ID: {bot.user.id})")
-    print(f"📡 Serveurs : {[guild.name for guild in bot.guilds]}")
-    # Synchronisation des commandes slash (important)
+    print(f"✅ Bot connecté : {bot.user}")
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
-    await send_log("🚀 Bot démarré avec commandes slash")
-    # Vérification des salons
-    for guild in bot.guilds:
-        for channel in guild.text_channels:
-            if channel.id in (ID_BIENVENUE, ID_AUREVOIR, VIDEO_CHANNEL_ID, LOG_CHANNEL_ID):
-                print(f"🔗 Salon trouvé : #{channel.name} (ID {channel.id})")
+    await send_log("🚀 Bot démarré (avec !ping et /ping)")
 
 async def main():
     asyncio.create_task(start_http_server())
