@@ -17,6 +17,9 @@ VIDEO_CHANNEL_ID = 1513174573632454817
 LOG_CHANNEL_ID = 1512010693665099876
 VERIFICATION_CHANNEL_ID = 1511654306414198805   # salon #‼️règles‼️
 
+# ID du MESSAGE dans le salon règles (celui qui contient les règles)
+RULES_MESSAGE_ID = 1511657834192961598
+
 # IDs des rôles
 UNVERIFIED_ROLE_ID = 1513799071029137499        # rôle "Non vérifié"
 MEMBER_ROLE_ID = 1512012606435491911            # rôle "Membres"
@@ -89,42 +92,40 @@ async def lire_image(fond_path: str) -> bytes:
     with open(fond_path, "rb") as f:
         return f.read()
 
-# ------------------ SYSTÈME DE VÉRIFICATION ------------------
-async def setup_verification_message():
-    """Crée ou recycle le message de vérification dans le salon #règles."""
+# ------------------ VÉRIFICATION PAR RÉACTION (sur message existant) ------------------
+async def setup_verification_reaction():
+    """Ajoute la réaction ✅ sur le message défini par RULES_MESSAGE_ID."""
     channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
     if not channel:
-        print("Salon de vérification introuvable.")
+        print("Salon de règles introuvable.")
         return
-
-    # Supprimer les anciens messages du bot dans ce salon
-    async for message in channel.history(limit=100):
-        if message.author == bot.user:
-            await message.delete()
-
-    # Envoyer le nouveau message
-    embed = discord.Embed(
-        title="🔐 Vérification requise",
-        description=(
-            "Bienvenue sur le serveur ! Pour accéder aux salons, vous devez accepter les règles.\n\n"
-            f"Réagissez avec {VERIFICATION_EMOJI} pour être vérifié."
-        ),
-        color=discord.Color.blue()
-    )
-    msg = await channel.send(embed=embed)
-    await msg.add_reaction(VERIFICATION_EMOJI)
-    print("Message de vérification créé.")
-    return msg
+    try:
+        message = await channel.fetch_message(RULES_MESSAGE_ID)
+        # Vérifier si la réaction existe déjà
+        for reaction in message.reactions:
+            if str(reaction.emoji) == VERIFICATION_EMOJI:
+                return
+        await message.add_reaction(VERIFICATION_EMOJI)
+        print(f"✅ Réaction {VERIFICATION_EMOJI} ajoutée au message {RULES_MESSAGE_ID}")
+    except discord.NotFound:
+        print(f"❌ Message {RULES_MESSAGE_ID} introuvable dans le salon {channel.name}")
+    except discord.Forbidden:
+        print("❌ Permission manquante pour ajouter une réaction.")
+    except Exception as e:
+        print(f"Erreur : {e}")
 
 @bot.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
+    # Ignorer le bot
     if payload.user_id == bot.user.id:
         return
-
-    # Vérifier que c'est dans le bon salon et la bonne réaction
+    # Vérifier que c'est le bon salon et la bonne réaction
     if payload.channel_id != VERIFICATION_CHANNEL_ID:
         return
     if str(payload.emoji) != VERIFICATION_EMOJI:
+        return
+    # Vérifier que c'est le bon message
+    if payload.message_id != RULES_MESSAGE_ID:
         return
 
     guild = bot.get_guild(payload.guild_id)
@@ -137,15 +138,20 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
     member_role = guild.get_role(MEMBER_ROLE_ID)
     if not unverified_role or not member_role:
-        await send_log("❌ Rôles de vérification introuvables.")
+        await send_log("❌ Rôles de vérification introuvables. Vérifie les IDs.")
         return
 
     # Échanger les rôles
-    await member.add_roles(member_role)
-    await member.remove_roles(unverified_role)
-    await send_log(f"✅ {member.name} a été vérifié et a reçu le rôle Membre.")
+    try:
+        await member.add_roles(member_role)
+        await member.remove_roles(unverified_role)
+        await send_log(f"✅ {member.name} vérifié (rôle Membre ajouté, Non vérifié retiré).")
+    except discord.Forbidden:
+        await send_log(f"❌ Permission manquante pour modifier les rôles de {member.name}.")
+    except Exception as e:
+        await send_log(f"❌ Erreur lors du changement de rôle : {e}")
 
-    # Retirer la réaction pour éviter de multiples validations
+    # Retirer la réaction (optionnel)
     try:
         channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
         msg = await channel.fetch_message(payload.message_id)
@@ -156,33 +162,37 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent):
 # ------------------ BIENVENUE (MP + rôle non vérifié) ------------------
 @bot.event
 async def on_member_join(member):
-    # Anti-spam
     now = time.time()
     if member.id in recent_joins and now - recent_joins[member.id] < SPAM_SECONDS:
         await send_log(f"🚫 Ignoré doublon arrivée de {member.name}")
         return
     recent_joins[member.id] = now
 
-    # 1. Envoyer un message privé au nouveau membre
+    # 1. Envoyer un message privé
     try:
         mp_message = (
             "Salut ! Pour pouvoir interagir avec le serveur, tu devras réagir avec ✅ "
             f"dans le salon <#{VERIFICATION_CHANNEL_ID}> (règles)."
         )
         await member.send(mp_message)
-        await send_log(f"📨 MP envoyé à {member.name} pour la vérification.")
+        await send_log(f"📨 MP envoyé à {member.name}")
     except discord.Forbidden:
-        await send_log(f"⚠️ Impossible d'envoyer un MP à {member.name} (bloqué).")
+        await send_log(f"⚠️ Impossible d'envoyer un MP à {member.name} (DMs fermés).")
 
     # 2. Ajouter le rôle "Non vérifié"
     unverified_role = member.guild.get_role(UNVERIFIED_ROLE_ID)
     if unverified_role:
-        await member.add_roles(unverified_role)
-        await send_log(f"🔒 Rôle 'Non vérifié' ajouté à {member.name}")
+        try:
+            await member.add_roles(unverified_role)
+            await send_log(f"🔒 Rôle 'Non vérifié' ajouté à {member.name}")
+        except discord.Forbidden:
+            await send_log(f"❌ Permission manquante pour ajouter le rôle 'Non vérifié' à {member.name}")
+        except Exception as e:
+            await send_log(f"❌ Erreur ajout rôle : {e}")
     else:
-        await send_log("❌ Rôle 'Non vérifié' introuvable. La vérification ne fonctionnera pas.")
+        await send_log(f"❌ Rôle 'Non vérifié' (ID {UNVERIFIED_ROLE_ID}) introuvable.")
 
-    # 3. Envoyer le message de bienvenue classique dans le salon dédié
+    # 3. Message de bienvenue dans le salon dédié
     canal = bot.get_channel(ID_BIENVENUE)
     if canal:
         try:
@@ -199,7 +209,7 @@ async def on_member_join(member):
     else:
         await send_log("❌ Salon de bienvenue introuvable.")
 
-# ------------------ AU REVOIR (inchangé) ------------------
+# ------------------ AU REVOIR ------------------
 @bot.event
 async def on_member_remove(member):
     now = time.time()
@@ -223,7 +233,7 @@ async def on_member_remove(member):
     else:
         await send_log("❌ Salon d'au revoir introuvable.")
 
-# ------------------ AUTRES ÉVÉNEMENTS (logs complets) ------------------
+# ------------------ AUTRES ÉVÉNEMENTS DE LOGS ------------------
 @bot.event
 async def on_member_update(before, after):
     if before.display_name != after.display_name:
@@ -349,8 +359,8 @@ async def on_ready():
     print(f"✅ Bot connecté : {bot.user}")
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
-    await setup_verification_message()   # Crée le message de vérification
-    await send_log("🚀 Bot démarré (vérification par réaction incluse)")
+    await setup_verification_reaction()   # Ajoute la réaction sur le message existant
+    await send_log("🚀 Bot démarré (vérification par réaction sur message existant)")
 
 async def main():
     asyncio.create_task(start_http_server())
