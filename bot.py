@@ -168,11 +168,11 @@ async def on_member_join(member):
         return
     recent_joins[member.id] = now
 
-    # 1. Envoyer un message privé
+    # 1. Envoyer un message privé (sans "(règles)")
     try:
         mp_message = (
             "Salut ! Pour pouvoir interagir avec le serveur, tu devras réagir avec ✅ "
-            f"dans le salon <#{VERIFICATION_CHANNEL_ID}> (règles)."
+            f"dans le salon <#{VERIFICATION_CHANNEL_ID}>."
         )
         await member.send(mp_message)
         await send_log(f"📨 MP envoyé à {member.name}")
