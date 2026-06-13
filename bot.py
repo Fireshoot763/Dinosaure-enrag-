@@ -10,7 +10,7 @@ import time
 import re
 
 # ------------------ CONFIGURATION ------------------
-# IDs des salons (à vérifier)
+# IDs des salons
 ID_BIENVENUE = 1512009964988661861
 ID_AUREVOIR = 1512010175907631104
 VIDEO_CHANNEL_ID = 1513174573632454817
@@ -21,6 +21,16 @@ RULES_MESSAGE_ID = 1511657834192961598          # message des règles (avec réa
 # IDs des rôles existants
 UNVERIFIED_ROLE_ID = 1513799071029137499        # "Non vérifié"
 MEMBER_ROLE_ID = 1512012606435491911            # "Membres"
+
+# Noms des rôles pour la sélection (le bot cherchera par nom)
+ROLE_NAMES = {
+    "féminin": "Féminin",
+    "masculin": "Masculin",
+    "majeur": "Majeur",
+    "mineur": "Mineur",
+    "dessinateur": "Dessinateur",
+    "animateur": "Animateur"
+}
 
 # ID de la personne autorisée pour les vidéos
 AUTHORIZED_USER_ID = 1274426216413139007
@@ -58,6 +68,8 @@ async def send_log(message: str):
             await channel.send(f"📋 {message}")
         except Exception as e:
             print(f"Erreur log Discord : {e}")
+    else:
+        print(f"Log (salon introuvable) : {message}")
 
 # ------------------ SERVEUR HTTP ------------------
 async def handle_health(request):
@@ -109,127 +121,91 @@ async def ensure_roles(guild):
     if created:
         await send_log(f"✅ Rôles créés automatiquement : {', '.join(created)}")
 
-# ------------------ VUE À MENUS POUR LA SÉLECTION ------------------
+# ------------------ VUE À BOUTONS POUR LA SÉLECTION (EN MP) ------------------
 class RoleSelectView(discord.ui.View):
     def __init__(self, member: discord.Member):
-        super().__init__(timeout=300)  # 5 minutes
+        super().__init__(timeout=300)
         self.member = member
-        self.gender_selected = None
-        self.age_selected = None
-        self.creator_selected = None
-        self.add_menu()
+        self.choices = {"gender": None, "age": None, "creator": None}
+        self.message = None
 
-    def add_menu(self):
-        self.gender_menu = discord.ui.Select(
-            placeholder="Sélectionne ton genre",
-            options=[
-                discord.SelectOption(label="Féminin", value="Féminin", emoji="♀️"),
-                discord.SelectOption(label="Masculin", value="Masculin", emoji="♂️")
-            ]
-        )
-        self.age_menu = discord.ui.Select(
-            placeholder="Sélectionne ta tranche d'âge",
-            options=[
-                discord.SelectOption(label="Majeur (18+)", value="Majeur", emoji="🔞"),
-                discord.SelectOption(label="Mineur (-18)", value="Mineur", emoji="🧒")
-            ]
-        )
-        self.creator_menu = discord.ui.Select(
-            placeholder="Sélectionne ton statut créatif",
-            options=[
-                discord.SelectOption(label="Dessinateur", value="Dessinateur", emoji="✏️"),
-                discord.SelectOption(label="Animateur", value="Animateur", emoji="🎬")
-            ]
-        )
-        
-        self.gender_menu.callback = self.gender_callback
-        self.age_menu.callback = self.age_callback
-        self.creator_menu.callback = self.creator_callback
-        
-        self.add_item(self.gender_menu)
-        self.add_item(self.age_menu)
-        self.add_item(self.creator_menu)
+    @discord.ui.button(label="Féminin", style=discord.ButtonStyle.secondary, emoji="♀️", custom_id="gender_female")
+    async def gender_female(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_choice(interaction, "gender", "Féminin", "Masculin", button)
 
-    async def gender_callback(self, interaction: discord.Interaction):
+    @discord.ui.button(label="Masculin", style=discord.ButtonStyle.secondary, emoji="♂️", custom_id="gender_male")
+    async def gender_male(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_choice(interaction, "gender", "Masculin", "Féminin", button)
+
+    @discord.ui.button(label="Majeur", style=discord.ButtonStyle.secondary, emoji="🔞", custom_id="age_adult")
+    async def age_adult(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_choice(interaction, "age", "Majeur", "Mineur", button)
+
+    @discord.ui.button(label="Mineur", style=discord.ButtonStyle.secondary, emoji="🧒", custom_id="age_minor")
+    async def age_minor(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_choice(interaction, "age", "Mineur", "Majeur", button)
+
+    @discord.ui.button(label="Dessinateur", style=discord.ButtonStyle.secondary, emoji="✏️", custom_id="creator_drawer")
+    async def creator_drawer(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_choice(interaction, "creator", "Dessinateur", "Animateur", button)
+
+    @discord.ui.button(label="Animateur", style=discord.ButtonStyle.secondary, emoji="🎬", custom_id="creator_animator")
+    async def creator_animator(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self.handle_choice(interaction, "creator", "Animateur", "Dessinateur", button)
+
+    async def handle_choice(self, interaction: discord.Interaction, category: str, chosen: str, opposite: str, button: discord.ui.Button):
         if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Cette sélection ne vous est pas destinée.", ephemeral=True)
-        await self.update_role(interaction, self.gender_menu.values[0], "genre")
-        self.gender_selected = self.gender_menu.values[0]
-        self.gender_menu.disabled = True
-        await interaction.response.edit_message(view=self)
-        await self.check_completion(interaction)
-
-    async def age_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Cette sélection ne vous est pas destinée.", ephemeral=True)
-        await self.update_role(interaction, self.age_menu.values[0], "âge")
-        self.age_selected = self.age_menu.values[0]
-        self.age_menu.disabled = True
-        await interaction.response.edit_message(view=self)
-        await self.check_completion(interaction)
-
-    async def creator_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Cette sélection ne vous est pas destinée.", ephemeral=True)
-        await self.update_role(interaction, self.creator_menu.values[0], "statut")
-        self.creator_selected = self.creator_menu.values[0]
-        self.creator_menu.disabled = True
-        await interaction.response.edit_message(view=self)
-        await self.check_completion(interaction)
-
-    async def update_role(self, interaction: discord.Interaction, role_name: str, category: str):
+            return await interaction.response.send_message("Ce panneau ne vous est pas destiné.", ephemeral=True)
+        # Attribuer le rôle choisi et retirer l'opposé
         guild = interaction.guild
-        role = discord.utils.get(guild.roles, name=role_name)
-        if not role:
-            await interaction.followup.send(f"❌ Le rôle `{role_name}` est introuvable. Contacte un administrateur.", ephemeral=True)
+        role_chosen = discord.utils.get(guild.roles, name=chosen)
+        role_opposite = discord.utils.get(guild.roles, name=opposite)
+        if not role_chosen:
+            await interaction.response.send_message(f"❌ Le rôle {chosen} est introuvable. Contacte un administrateur.", ephemeral=True)
             return
-        # Retirer le rôle opposé dans la même catégorie
-        opposite_map = {
-            ("Féminin", "Masculin"): ("Masculin", "Féminin"),
-            ("Majeur", "Mineur"): ("Mineur", "Majeur"),
-            ("Dessinateur", "Animateur"): ("Animateur", "Dessinateur")
-        }
-        for (a, b), (opp_a, opp_b) in opposite_map.items():
-            if role_name == a:
-                opposite = discord.utils.get(guild.roles, name=b)
-            elif role_name == b:
-                opposite = discord.utils.get(guild.roles, name=a)
-            else:
-                continue
-            if opposite and opposite in interaction.user.roles:
-                await interaction.user.remove_roles(opposite)
-            break
-        await interaction.user.add_roles(role)
-        await send_log(f"🔁 {interaction.user.name} a choisi {role_name} (catégorie {category})")
-
-    async def check_completion(self, interaction: discord.Interaction):
-        if self.gender_selected and self.age_selected and self.creator_selected:
+        await interaction.user.add_roles(role_chosen)
+        await send_log(f"➕ {interaction.user.name} a choisi {chosen}")
+        if role_opposite and role_opposite in interaction.user.roles:
+            await interaction.user.remove_roles(role_opposite)
+        # Mettre à jour les choix
+        self.choices[category] = chosen
+        # Désactiver le bouton correspondant
+        button.disabled = True
+        # Désactiver le bouton opposé
+        for child in self.children:
+            if child.custom_id == f"{category}_{opposite.lower()}":
+                child.disabled = True
+                break
+        await interaction.response.edit_message(view=self)
+        # Vérifier si tous les choix sont faits
+        if all(self.choices.values()):
             # Retirer le rôle "Non vérifié"
-            unverified_role = interaction.guild.get_role(UNVERIFIED_ROLE_ID)
+            unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
             if unverified_role and unverified_role in interaction.user.roles:
                 await interaction.user.remove_roles(unverified_role)
                 await send_log(f"🔓 {interaction.user.name} a terminé la sélection, accès aux règles accordé.")
-            # Désactiver tous les menus
-            for item in self.children:
-                item.disabled = True
-            await interaction.message.edit(view=self)
+            # Désactiver tous les boutons
+            for child in self.children:
+                child.disabled = True
+            await self.message.edit(view=self)
             embed_success = discord.Embed(
                 title="✅ Parcours terminé !",
                 description=f"Rends-toi maintenant dans le salon <#{VERIFICATION_CHANNEL_ID}> et réagis avec {VERIFICATION_EMOJI} sur le message des règles pour accéder au serveur.",
                 color=0x00ff00
             )
             await interaction.followup.send(embed=embed_success, ephemeral=True)
+            self.stop()
 
     async def on_timeout(self):
-        for item in self.children:
-            item.disabled = True
-        if hasattr(self, 'message'):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
             try:
                 await self.message.edit(view=self)
             except:
                 pass
 
-# ------------------ VÉRIFICATION PAR RÉACTION (sur message existant) ------------------
+# ------------------ VÉRIFICATION PAR RÉACTION (inchangée) ------------------
 async def setup_verification_reaction():
     channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
     if not channel:
@@ -259,16 +235,19 @@ async def on_raw_reaction_add(payload):
     member = guild.get_member(payload.user_id)
     if not member:
         return
-    # Vérifier que le membre a bien fait la sélection (n'a plus le rôle "Non vérifié")
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
     if unverified_role and unverified_role in member.roles:
         await send_log(f"⚠️ {member.name} a essayé de réagir aux règles sans avoir fait la sélection de rôles.")
+        # Envoyer un MP pour rappeler la sélection
+        try:
+            await member.send(f"Merci de faire d'abord la sélection des rôles (tu as reçu un message privé) avant d'accepter les règles.")
+        except:
+            pass
         return
     member_role = guild.get_role(MEMBER_ROLE_ID)
     if member_role:
         await member.add_roles(member_role)
         await send_log(f"✅ {member.name} a réagi aux règles et est devenu Membre.")
-        # Retirer la réaction pour éviter les doublons
         try:
             channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
             msg = await channel.fetch_message(payload.message_id)
@@ -276,10 +255,9 @@ async def on_raw_reaction_add(payload):
         except:
             pass
 
-# ------------------ BIENVENUE ------------------
+# ------------------ BIENVENUE (MP + message dans le salon) ------------------
 @bot.event
 async def on_member_join(member):
-    # Anti-spam
     now = time.time()
     if member.id in recent_joins and now - recent_joins[member.id] < SPAM_SECONDS:
         await send_log(f"🚫 Ignoré doublon arrivée de {member.name}")
@@ -297,7 +275,7 @@ async def on_member_join(member):
     else:
         await send_log(f"❌ Rôle Non vérifié (ID {UNVERIFIED_ROLE_ID}) introuvable.")
 
-    # Message de bienvenue dans le salon dédié
+    # Envoyer le message de bienvenue dans le salon dédié
     canal_bienvenue = bot.get_channel(ID_BIENVENUE)
     if canal_bienvenue:
         try:
@@ -311,21 +289,21 @@ async def on_member_join(member):
         except Exception as e:
             await send_log(f"⚠️ Erreur bienvenue : {e}")
 
-        # Panneau de sélection des rôles (message visible par tous, mais seul le membre peut interagir)
+    # Envoyer le panneau de sélection en message privé
+    try:
         embed_select = discord.Embed(
             title="🔧 Configuration de ton profil",
-            description=(
-                "Bienvenue ! Pour accéder au serveur, choisis les options ci-dessous.\n\n"
-                "**Genre**\n**Âge**\n**Statut créatif**"
-            ),
-            color=0x2b2d31  # gris foncé
+            description="Bienvenue sur le serveur ! Choisis les options ci-dessous pour accéder aux salons.\n\nClique sur un bouton par catégorie :",
+            color=0x2b2d31
         )
         view = RoleSelectView(member)
-        msg = await canal_bienvenue.send(embed=embed_select, view=view)
+        msg = await member.send(embed=embed_select, view=view)
         view.message = msg
-        await send_log(f"📨 Panneau de sélection envoyé à {member.name} dans {canal_bienvenue.mention}")
-    else:
-        await send_log(f"❌ Salon de bienvenue introuvable (ID {ID_BIENVENUE})")
+        await send_log(f"📨 Panneau de sélection (boutons) envoyé en MP à {member.name}")
+    except discord.Forbidden:
+        await send_log(f"⚠️ Impossible d'envoyer un MP à {member.name} (DM fermés).")
+    except Exception as e:
+        await send_log(f"❌ Erreur envoi MP : {e}")
 
 # ------------------ AU REVOIR ------------------
 @bot.event
@@ -388,7 +366,6 @@ async def slash_ping(interaction: discord.Interaction):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_roles(ctx):
-    """Recrée les rôles manquants (Féminin, Masculin, etc.)"""
     await ensure_roles(ctx.guild)
     await ctx.send("✅ Vérification/création des rôles effectuée.", ephemeral=True)
 
@@ -404,11 +381,10 @@ async def on_ready():
     print(f"✅ Bot connecté : {bot.user}")
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
-    # Créer les rôles manquants sur chaque serveur
     for guild in bot.guilds:
         await ensure_roles(guild)
     await setup_verification_reaction()
-    await send_log("🚀 Bot démarré (panneau de sélection dans le serveur, rôles auto-créés)")
+    await send_log("🚀 Bot démarré (sélection des rôles en MP)")
 
 async def main():
     asyncio.create_task(start_http_server())
