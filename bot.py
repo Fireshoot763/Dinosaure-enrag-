@@ -70,7 +70,7 @@ async def start_http_server():
     await site.start()
     print("✅ Serveur HTTP sur le port 8080")
 
-# ------------------ GESTION DES PERMISSIONS (salons, vocaux, catégories) ------------------
+# ------------------ GESTION DES PERMISSIONS ------------------
 async def fix_channel_permissions(guild):
     new_role = guild.get_role(ROLE_NEW_ID)
     member_role = guild.get_role(ROLE_MEMBER_ID)
@@ -97,22 +97,13 @@ async def fix_channel_permissions(guild):
         await rules_channel.set_permissions(member_role, view_channel=True)
         await send_log("✅ Permissions #règles OK")
 
-    # Salons et catégories à exclure
-    exclude_ids = [
-        onboarding_channel.id if onboarding_channel else None,
-        rules_channel.id,
-        LOG_CHANNEL_ID,
-        WELCOME_CHANNEL_ID,
-        GOODBYE_CHANNEL_ID,
-        VIDEO_CHANNEL_ID
-    ]
-    exclude_ids = [cid for cid in exclude_ids if cid is not None]
-
-    # Modifier les permissions de toutes les catégories et salons
+    # Salons à exclure (ceux qui doivent rester visibles même pour les nouveaux ? Aucun, on masque tout sauf choix-roles et règles)
+    # On masque tous les autres salons (y compris bienvenue, au-revoir, vidéos, logs)
+    # Si tu veux que le salon logs soit visible par les admins seulement, ajoute une condition plus tard.
     for channel in guild.channels:
-        if channel.id in exclude_ids:
+        if channel.id == (onboarding_channel.id if onboarding_channel else None) or channel.id == rules_channel.id:
             continue
-        # On restreint l'accès pour tous les rôles sauf Membre
+        # Pour tous les autres salons (y compris catégories)
         await channel.set_permissions(guild.default_role, view_channel=False)
         await channel.set_permissions(new_role, view_channel=False)
         await channel.set_permissions(verifying_role, view_channel=False)
@@ -120,9 +111,8 @@ async def fix_channel_permissions(guild):
         if isinstance(channel, discord.VoiceChannel):
             await channel.set_permissions(member_role, connect=True, speak=True)
         if isinstance(channel, discord.CategoryChannel):
-            # Pour les catégories, on force les permissions (les salons enfants héritent)
-            await send_log(f"✅ Catégorie {channel.name} configurée.")
-    await send_log("✅ Permissions des salons et catégories mises à jour.")
+            await send_log(f"✅ Catégorie {channel.name} configurée (masquée sauf pour Membre).")
+    await send_log("✅ Permissions mises à jour : tous les salons sauf #choix-roles et #règles sont masqués pour les non-membres.")
 
 # ------------------ CRÉATION AUTO DES RÔLES ET SALON ------------------
 async def ensure_onboarding(guild):
