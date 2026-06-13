@@ -53,9 +53,8 @@ async def send_log(message: str):
                 message = message[:1990] + "..."
             await channel.send(f"📋 {message}")
         except Exception as e:
-            print(f"Erreur log : {e}")
-    else:
-        print(f"Log : {message}")
+            print(f"Erreur log Discord : {e}")
+    print(f"[LOG] {message}")  # Affiche aussi dans la console Render
 
 # ------------------ SERVEUR HTTP ------------------
 async def handle_health(request):
@@ -140,45 +139,59 @@ async def ensure_onboarding(guild):
         await send_log(f"ℹ️ Salon 'choix-roles' déjà existant (ID: {onboarding_channel.id})")
     return verifying_role, onboarding_channel
 
-# ------------------ MESSAGE UNIQUE AVEC RÉACTIONS ------------------
+# ------------------ MESSAGE UNIQUE AVEC RÉACTIONS (VERSION ROBUSTE) ------------------
 async def create_onboarding_message(guild):
-    try:
-        channel = discord.utils.get(guild.text_channels, name="choix-roles")
-        if not channel:
-            await send_log("❌ Salon #choix-roles introuvable.")
-            return False
+    """Crée le message d'onboarding avec logs détaillés."""
+    await send_log("🔧 Début de création du message d'onboarding...")
+    channel = discord.utils.get(guild.text_channels, name="choix-roles")
+    if not channel:
+        await send_log("❌ Salon #choix-roles introuvable.")
+        return False
 
-        # Supprimer les anciens messages du bot
+    await send_log(f"✅ Salon trouvé : {channel.name} (ID: {channel.id})")
+
+    # Supprimer les anciens messages du bot
+    try:
         async for message in channel.history(limit=200):
             if message.author == bot.user:
                 await message.delete()
-
-        embed = discord.Embed(
-            title="🔧 Choisis tes rôles",
-            description=(
-                "Clique sur les réactions ci-dessous pour obtenir des rôles (optionnels) :\n\n"
-                "♀️ – Féminin\n"
-                "♂️ – Masculin\n"
-                "🔞 – Majeur (18+)\n"
-                "🧒 – Mineur\n"
-                "✏️ – Dessinateur\n"
-                "🎬 – Animateur\n"
-                "🤐 – Rester anonyme (ne donne aucun rôle)\n\n"
-                "Une fois tes choix faits (ou non), clique sur **✅** pour valider ton parcours."
-            ),
-            color=0x2b2d31
-        )
-        message = await channel.send(embed=embed)
-
-        emojis = ["♀️", "♂️", "🔞", "🧒", "✏️", "🎬", "🤐", "✅"]
-        for emoji in emojis:
-            await message.add_reaction(emoji)
-
-        await send_log("✅ Message d'onboarding avec réactions créé.")
-        return True
+        await send_log("✅ Anciens messages supprimés.")
     except Exception as e:
-        await send_log(f"❌ Erreur lors de la création du message d'onboarding : {e}")
+        await send_log(f"⚠️ Erreur lors de la suppression des anciens messages : {e}")
+
+    # Créer l'embed
+    embed = discord.Embed(
+        title="🔧 Choisis tes rôles",
+        description=(
+            "Clique sur les réactions ci-dessous pour obtenir des rôles (optionnels) :\n\n"
+            "♀️ – Féminin\n"
+            "♂️ – Masculin\n"
+            "🔞 – Majeur (18+)\n"
+            "🧒 – Mineur\n"
+            "✏️ – Dessinateur\n"
+            "🎬 – Animateur\n"
+            "🤐 – Rester anonyme (ne donne aucun rôle)\n\n"
+            "Une fois tes choix faits (ou non), clique sur **✅** pour valider ton parcours."
+        ),
+        color=0x2b2d31
+    )
+    try:
+        message = await channel.send(embed=embed)
+        await send_log(f"✅ Message envoyé (ID: {message.id})")
+    except Exception as e:
+        await send_log(f"❌ Erreur lors de l'envoi du message : {e}")
         return False
+
+    # Ajouter les réactions
+    emojis = ["♀️", "♂️", "🔞", "🧒", "✏️", "🎬", "🤐", "✅"]
+    for emoji in emojis:
+        try:
+            await message.add_reaction(emoji)
+            await send_log(f"   ➕ Réaction {emoji} ajoutée")
+        except Exception as e:
+            await send_log(f"❌ Erreur ajout réaction {emoji} : {e}")
+    await send_log("✅ Message d'onboarding avec réactions créé avec succès.")
+    return True
 
 # ------------------ FONCTIONS D'AIDE POUR LES RÔLES ------------------
 async def assign_role(member, role_name):
@@ -377,6 +390,25 @@ async def setup_perms(ctx):
 async def create_onboarding_message(ctx):
     await create_onboarding_message(ctx.guild)
     await ctx.send("✅ Message d'onboarding recréé.", ephemeral=True)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def diagnose(ctx):
+    """Commande de diagnostic pour vérifier les permissions."""
+    guild = ctx.guild
+    channel = discord.utils.get(guild.text_channels, name="choix-roles")
+    if not channel:
+        await ctx.send("❌ Salon #choix-roles introuvable.")
+        return
+    perms = channel.permissions_for(guild.me)
+    await ctx.send(f"**Permissions du bot dans #{channel.name} :**\n"
+                   f"- Voir le salon : {perms.view_channel}\n"
+                   f"- Envoyer des messages : {perms.send_messages}\n"
+                   f"- Lire l'historique : {perms.read_message_history}\n"
+                   f"- Gérer les messages : {perms.manage_messages}\n"
+                   f"- Ajouter des réactions : {perms.add_reactions}\n"
+                   f"- Utiliser les commandes : {perms.use_application_commands}",
+                   ephemeral=True)
 
 @bot.event
 async def on_command_error(ctx, error):
