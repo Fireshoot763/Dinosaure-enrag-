@@ -7,14 +7,17 @@ import time
 from datetime import datetime
 
 # ------------------ CONFIGURATION ------------------
-WELCOME_CHANNEL_ID = 1512009964988661861
+WELCOME_CHANNEL_ID = 1512009964988661861      # salon #bienvenue (public, optionnel)
 GOODBYE_CHANNEL_ID = 1512010175907631104
 VIDEO_CHANNEL_ID = 1513174573632454817
 LOG_CHANNEL_ID = 1512010693665099876
-RULES_CHANNEL_ID = 1511654306414198805
+RULES_CHANNEL_ID = 1511654306414198805        # salon #‼️règles‼️
 
-ROLE_NEW_ID = 1513799071029137499
-ROLE_MEMBER_ID = 1512012606435491911
+ROLE_NEW_ID = 1513799071029137499             # "Non vérifié" (Nouveau)
+ROLE_MEMBER_ID = 1512012606435491911          # "Membres"
+
+# Le rôle "En attente" sera créé automatiquement, pas besoin d'ID fixe
+
 AUTHORIZED_USER_ID = 1274426216413139007
 
 ROLES_TO_CREATE = [
@@ -54,7 +57,7 @@ async def send_log(message: str):
         except Exception as e:
             print(f"Erreur log : {e}")
     else:
-        print(f"Log (salon introuvable) : {message}")
+        print(f"Log : {message}")
 
 # ------------------ SERVEUR HTTP ------------------
 async def handle_health(request):
@@ -68,6 +71,47 @@ async def start_http_server():
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
     print("✅ Serveur HTTP sur le port 8080")
+
+# ------------------ GESTION DES PERMISSIONS DES SALONS ------------------
+async def fix_channel_permissions(guild):
+    """Assure que les permissions des salons sont correctes pour le flux."""
+    # Récupérer les rôles
+    new_role = guild.get_role(ROLE_NEW_ID)
+    member_role = guild.get_role(ROLE_MEMBER_ID)
+    verifying_role = discord.utils.get(guild.roles, name="En attente")
+    if not new_role or not member_role or not verifying_role:
+        await send_log("❌ Rôles manquants pour configurer les permissions.")
+        return
+
+    # Salon choix-roles : visible uniquement par new_role
+    onboarding_channel = discord.utils.get(guild.text_channels, name="choix-roles")
+    if onboarding_channel:
+        await onboarding_channel.set_permissions(guild.default_role, view_channel=False)
+        await onboarding_channel.set_permissions(new_role, view_channel=True, send_messages=True, read_messages=True)
+        await onboarding_channel.set_permissions(verifying_role, view_channel=False)
+        await onboarding_channel.set_permissions(member_role, view_channel=False)
+        await send_log("✅ Permissions du salon #choix-roles mises à jour.")
+
+    # Salon règles : visible par new_role (pour qu'il le voie après validation? non, on veut qu'il ne le voie qu'après validation, mais on veut qu'il y ait accès après avoir quitté new_role? En fait, dès qu'il valide, il a verifying_role, donc il doit voir règles. Donc règles doit être visible par verifying_role et member_role (et éventuellement new_role ? Non, on veut qu'avant validation, il ne voit que choix-roles. Donc new_role ne doit pas voir règles.
+    rules_channel = guild.get_channel(RULES_CHANNEL_ID)
+    if rules_channel:
+        await rules_channel.set_permissions(guild.default_role, view_channel=False)
+        await rules_channel.set_permissions(new_role, view_channel=False)
+        await rules_channel.set_permissions(verifying_role, view_channel=True, send_messages=True, read_messages=True)
+        await rules_channel.set_permissions(member_role, view_channel=True)
+        await send_log("✅ Permissions du salon #règles mises à jour.")
+
+    # Tous les autres salons (à l'exception de ceux de logs, vidéos, etc.) : visibles uniquement par member_role
+    # On va lister les salons textuels à exclure (logs, bienvenue, au-revoir, vidéos, règles, choix-roles)
+    exclude = [onboarding_channel.id, rules_channel.id, LOG_CHANNEL_ID, WELCOME_CHANNEL_ID, GOODBYE_CHANNEL_ID, VIDEO_CHANNEL_ID]
+    for channel in guild.text_channels:
+        if channel.id in exclude:
+            continue
+        await channel.set_permissions(guild.default_role, view_channel=False)
+        await channel.set_permissions(new_role, view_channel=False)
+        await channel.set_permissions(verifying_role, view_channel=False)
+        await channel.set_permissions(member_role, view_channel=True, send_messages=True, read_messages=True)
+    await send_log("✅ Permissions des autres salons mises à jour (visibles seulement par Membre).")
 
 # ------------------ CRÉATION AUTO DES RÔLES ET SALON ------------------
 async def ensure_onboarding(guild):
@@ -101,21 +145,12 @@ async def ensure_onboarding(guild):
             return verifying_role, None
     else:
         await send_log(f"ℹ️ Salon 'choix-roles' déjà existant (ID: {onboarding_channel.id})")
-        new_role = guild.get_role(ROLE_NEW_ID)
-        if new_role:
-            await onboarding_channel.set_permissions(new_role, view_channel=True, send_messages=True)
-            await onboarding_channel.set_permissions(guild.default_role, view_channel=False)
-
     return verifying_role, onboarding_channel
 
-# ------------------ VUE D'ONBOARDING (avec bouton Anonyme) ------------------
+# ------------------ VUE D'ONBOARDING (GÉNÉRIQUE) ------------------
 class OnboardingView(discord.ui.View):
-    def __init__(self, member: discord.Member):
-        super().__init__(timeout=600)
-        self.member = member
-        self.gender = None
-        self.age = None
-        self.creator = None
+    def __init__(self):
+        super().__init__(timeout=None)  # pas de timeout, le message reste
         self.message = None
 
         self.gender_menu = discord.ui.Select(
@@ -148,47 +183,43 @@ class OnboardingView(discord.ui.View):
         self.creator_menu.callback = self.creator_callback
         self.add_item(self.creator_menu)
 
-        # Bouton Anonyme (valide directement)
         self.anonymous = discord.ui.Button(label="🤐 Rester anonyme", style=discord.ButtonStyle.secondary, custom_id="anonymous")
         self.anonymous.callback = self.anonymous_callback
         self.add_item(self.anonymous)
 
-        # Bouton Valider (après choix)
         self.validate = discord.ui.Button(label="✅ Valider", style=discord.ButtonStyle.success, custom_id="validate")
         self.validate.callback = self.validate_callback
         self.add_item(self.validate)
 
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # Seuls les membres ayant le rôle "Nouveau" peuvent interagir
+        new_role = interaction.guild.get_role(ROLE_NEW_ID)
+        if not new_role or new_role not in interaction.user.roles:
+            await interaction.response.send_message("Tu n'es pas autorisé à utiliser ce panneau (tu as déjà validé ou tu n'es pas nouveau).", ephemeral=True)
+            return False
+        return True
+
     async def gender_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Ce panneau ne vous est pas destiné.", ephemeral=True)
         value = self.gender_menu.values[0]
-        self.gender = value
         await self.assign_role(interaction, value, "Féminin", "Masculin")
         self.gender_menu.disabled = True
         await interaction.response.edit_message(view=self)
 
     async def age_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Ce panneau ne vous est pas destiné.", ephemeral=True)
         value = self.age_menu.values[0]
-        self.age = value
         await self.assign_role(interaction, value, "Majeur", "Mineur")
         self.age_menu.disabled = True
         await interaction.response.edit_message(view=self)
 
     async def creator_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Ce panneau ne vous est pas destiné.", ephemeral=True)
         value = self.creator_menu.values[0]
-        self.creator = value
         await self.assign_role(interaction, value, "Dessinateur", "Animateur")
         self.creator_menu.disabled = True
         await interaction.response.edit_message(view=self)
 
     async def assign_role(self, interaction, chosen, role1, role2):
-        guild = interaction.guild
-        role = discord.utils.get(guild.roles, name=chosen)
-        opposite = discord.utils.get(guild.roles, name=role1 if chosen == role2 else role2)
+        role = discord.utils.get(interaction.guild.roles, name=chosen)
+        opposite = discord.utils.get(interaction.guild.roles, name=role1 if chosen == role2 else role2)
         if role:
             await interaction.user.add_roles(role)
             await send_log(f"➕ {interaction.user.name} a choisi {chosen}")
@@ -196,15 +227,14 @@ class OnboardingView(discord.ui.View):
             await interaction.user.remove_roles(opposite)
 
     async def finalize(self, interaction: discord.Interaction):
-        """Appelé par validate_callback ou anonymous_callback pour terminer l'onboarding."""
+        """Validation (avec ou sans rôles)"""
         # Désactiver tous les composants
         for child in self.children:
             child.disabled = True
         await interaction.response.edit_message(view=self)
 
-        guild = interaction.guild
-        new_role = guild.get_role(ROLE_NEW_ID)
-        verifying_role = discord.utils.get(guild.roles, name="En attente")
+        new_role = interaction.guild.get_role(ROLE_NEW_ID)
+        verifying_role = discord.utils.get(interaction.guild.roles, name="En attente")
         if new_role:
             await interaction.user.remove_roles(new_role)
         if verifying_role:
@@ -215,27 +245,12 @@ class OnboardingView(discord.ui.View):
             f"✅ Parcours validé ! Rends-toi dans <#{RULES_CHANNEL_ID}> et réagis avec {VERIFICATION_EMOJI} pour accéder au serveur.",
             ephemeral=True
         )
-        self.stop()
 
     async def validate_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Ce panneau ne vous est pas destiné.", ephemeral=True)
         await self.finalize(interaction)
 
     async def anonymous_callback(self, interaction: discord.Interaction):
-        if interaction.user.id != self.member.id:
-            return await interaction.response.send_message("Ce panneau ne vous est pas destiné.", ephemeral=True)
-        # Ne rien attribuer, juste valider
         await self.finalize(interaction)
-
-    async def on_timeout(self):
-        for child in self.children:
-            child.disabled = True
-        if self.message:
-            try:
-                await self.message.edit(view=self)
-            except:
-                pass
 
 # ------------------ VÉRIFICATION PAR RÉACTION ------------------
 @bot.event
@@ -280,6 +295,7 @@ async def on_member_join(member):
         return
     recent_joins[member.id] = now
 
+    # Ajouter le rôle Nouveau
     new_role = member.guild.get_role(ROLE_NEW_ID)
     if new_role:
         try:
@@ -290,6 +306,7 @@ async def on_member_join(member):
     else:
         await send_log(f"❌ Rôle 'Nouveau' (ID {ROLE_NEW_ID}) introuvable.")
 
+    # Message public de bienvenue (optionnel)
     welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
     if welcome_channel:
         embed = discord.Embed(
@@ -302,16 +319,18 @@ async def on_member_join(member):
             embed.set_thumbnail(url=member.avatar.url)
         await welcome_channel.send(embed=embed)
 
+    # Salon choix-roles : s'assurer qu'il existe
     onboarding_channel = discord.utils.get(member.guild.text_channels, name="choix-roles")
     if not onboarding_channel:
-        await send_log("❌ Salon 'choix-roles' introuvable.")
+        await send_log("❌ Salon 'choix-roles' introuvable. Exécute !setup_perms.")
         return
 
-    # Supprimer les anciens messages du bot dans ce salon
+    # Supprimer les anciens messages du bot (pour garder un seul message)
     async for message in onboarding_channel.history(limit=100):
         if message.author == bot.user:
             await message.delete()
 
+    # Envoyer le message unique (s'il n'existe pas déjà)
     embed = discord.Embed(
         title="🔧 Configuration de ton profil",
         description=(
@@ -321,10 +340,10 @@ async def on_member_join(member):
         ),
         color=0x2b2d31
     )
-    view = OnboardingView(member)
+    view = OnboardingView()
     msg = await onboarding_channel.send(embed=embed, view=view)
     view.message = msg
-    await send_log(f"📨 Panneau d'onboarding envoyé à {member.name} (unique message)")
+    await send_log(f"📨 Panneau d'onboarding (unique) envoyé dans {onboarding_channel.mention}")
 
 # ------------------ AUTRES ÉVÉNEMENTS ------------------
 @bot.event
@@ -375,8 +394,18 @@ async def slash_ping(interaction: discord.Interaction):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_roles(ctx):
+    """Crée les rôles optionnels et le salon d'onboarding."""
     await ensure_onboarding(ctx.guild)
-    await ctx.send("✅ Vérification/création des éléments d'onboarding effectuée.", ephemeral=True)
+    await ctx.send("✅ Éléments d'onboarding vérifiés/créés.", ephemeral=True)
+
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def setup_perms(ctx):
+    """Configure les permissions des salons pour le flux."""
+    # Créer d'abord les rôles si besoin
+    await ensure_onboarding(ctx.guild)
+    await fix_channel_permissions(ctx.guild)
+    await ctx.send("✅ Permissions des salons mises à jour.", ephemeral=True)
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -401,7 +430,8 @@ async def on_ready():
     for guild in bot.guilds:
         await create_optional_roles(guild)
         await ensure_onboarding(guild)
-    await send_log("🚀 Bot démarré (onboarding avec salon unique)")
+        await fix_channel_permissions(guild)   # <-- Applique les permissions
+    await send_log("🚀 Bot démarré (flux onboarding à trois étapes)")
 
 async def main():
     asyncio.create_task(start_http_server())
