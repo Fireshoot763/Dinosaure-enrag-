@@ -10,7 +10,7 @@ import time
 import re
 
 # ------------------ CONFIGURATION ------------------
-# IDs des salons (inchangés)
+# IDs des salons (à vérifier)
 ID_BIENVENUE = 1512009964988661861
 ID_AUREVOIR = 1512010175907631104
 VIDEO_CHANNEL_ID = 1513174573632454817
@@ -18,7 +18,7 @@ LOG_CHANNEL_ID = 1512010693665099876
 VERIFICATION_CHANNEL_ID = 1511654306414198805   # salon #‼️règles‼️
 RULES_MESSAGE_ID = 1511657834192961598          # message des règles (avec réaction ✅)
 
-# IDs des rôles de base (existants)
+# IDs des rôles existants
 UNVERIFIED_ROLE_ID = 1513799071029137499        # "Non vérifié"
 MEMBER_ROLE_ID = 1512012606435491911            # "Membres"
 
@@ -36,22 +36,6 @@ recent_joins = {}
 recent_leaves = {}
 SPAM_SECONDS = 10
 VERIFICATION_EMOJI = "✅"
-
-# Noms des rôles pour la sélection (le bot les cherchera par nom)
-ROLE_NAMES = {
-    "gender": {
-        "feminin": "Féminin",
-        "masculin": "Masculin"
-    },
-    "age": {
-        "majeur": "Majeur",
-        "mineur": "Mineur"
-    },
-    "creator": {
-        "dessinateur": "Dessinateur",
-        "animateur": "Animateur"
-    }
-}
 
 # ------------------ INTENTS ------------------
 intents = discord.Intents.default()
@@ -102,7 +86,7 @@ async def lire_image(fond_path: str) -> bytes:
     with open(fond_path, "rb") as f:
         return f.read()
 
-# ------------------ VÉRIFICATION DES RÔLES AU DÉMARRAGE ------------------
+# ------------------ CRÉATION AUTO DES RÔLES ------------------
 async def ensure_roles(guild):
     """Crée les rôles manquants (Féminin, Masculin, etc.) si besoin."""
     created = []
@@ -125,10 +109,10 @@ async def ensure_roles(guild):
     if created:
         await send_log(f"✅ Rôles créés automatiquement : {', '.join(created)}")
 
-# ------------------ VUE À MENUS POUR LA SÉLECTION (recherche par nom) ------------------
+# ------------------ VUE À MENUS POUR LA SÉLECTION ------------------
 class RoleSelectView(discord.ui.View):
     def __init__(self, member: discord.Member):
-        super().__init__(timeout=None)
+        super().__init__(timeout=300)  # 5 minutes
         self.member = member
         self.gender_selected = None
         self.age_selected = None
@@ -139,22 +123,22 @@ class RoleSelectView(discord.ui.View):
         self.gender_menu = discord.ui.Select(
             placeholder="Sélectionne ton genre",
             options=[
-                discord.SelectOption(label="Féminin", value="feminin", emoji="♀️"),
-                discord.SelectOption(label="Masculin", value="masculin", emoji="♂️")
+                discord.SelectOption(label="Féminin", value="Féminin", emoji="♀️"),
+                discord.SelectOption(label="Masculin", value="Masculin", emoji="♂️")
             ]
         )
         self.age_menu = discord.ui.Select(
             placeholder="Sélectionne ta tranche d'âge",
             options=[
-                discord.SelectOption(label="Majeur (18+)", value="majeur", emoji="🔞"),
-                discord.SelectOption(label="Mineur (-18)", value="mineur", emoji="🧒")
+                discord.SelectOption(label="Majeur (18+)", value="Majeur", emoji="🔞"),
+                discord.SelectOption(label="Mineur (-18)", value="Mineur", emoji="🧒")
             ]
         )
         self.creator_menu = discord.ui.Select(
             placeholder="Sélectionne ton statut créatif",
             options=[
-                discord.SelectOption(label="Dessinateur", value="dessinateur", emoji="✏️"),
-                discord.SelectOption(label="Animateur", value="animateur", emoji="🎬")
+                discord.SelectOption(label="Dessinateur", value="Dessinateur", emoji="✏️"),
+                discord.SelectOption(label="Animateur", value="Animateur", emoji="🎬")
             ]
         )
         
@@ -169,10 +153,8 @@ class RoleSelectView(discord.ui.View):
     async def gender_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.member.id:
             return await interaction.response.send_message("Cette sélection ne vous est pas destinée.", ephemeral=True)
-        value = self.gender_menu.values[0]
-        role_name = ROLE_NAMES["gender"][value]
-        await self.update_role(interaction, role_name, "genre")
-        self.gender_selected = value
+        await self.update_role(interaction, self.gender_menu.values[0], "genre")
+        self.gender_selected = self.gender_menu.values[0]
         self.gender_menu.disabled = True
         await interaction.response.edit_message(view=self)
         await self.check_completion(interaction)
@@ -180,10 +162,8 @@ class RoleSelectView(discord.ui.View):
     async def age_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.member.id:
             return await interaction.response.send_message("Cette sélection ne vous est pas destinée.", ephemeral=True)
-        value = self.age_menu.values[0]
-        role_name = ROLE_NAMES["age"][value]
-        await self.update_role(interaction, role_name, "âge")
-        self.age_selected = value
+        await self.update_role(interaction, self.age_menu.values[0], "âge")
+        self.age_selected = self.age_menu.values[0]
         self.age_menu.disabled = True
         await interaction.response.edit_message(view=self)
         await self.check_completion(interaction)
@@ -191,10 +171,8 @@ class RoleSelectView(discord.ui.View):
     async def creator_callback(self, interaction: discord.Interaction):
         if interaction.user.id != self.member.id:
             return await interaction.response.send_message("Cette sélection ne vous est pas destinée.", ephemeral=True)
-        value = self.creator_menu.values[0]
-        role_name = ROLE_NAMES["creator"][value]
-        await self.update_role(interaction, role_name, "statut")
-        self.creator_selected = value
+        await self.update_role(interaction, self.creator_menu.values[0], "statut")
+        self.creator_selected = self.creator_menu.values[0]
         self.creator_menu.disabled = True
         await interaction.response.edit_message(view=self)
         await self.check_completion(interaction)
@@ -226,11 +204,12 @@ class RoleSelectView(discord.ui.View):
 
     async def check_completion(self, interaction: discord.Interaction):
         if self.gender_selected and self.age_selected and self.creator_selected:
+            # Retirer le rôle "Non vérifié"
             unverified_role = interaction.guild.get_role(UNVERIFIED_ROLE_ID)
             if unverified_role and unverified_role in interaction.user.roles:
                 await interaction.user.remove_roles(unverified_role)
                 await send_log(f"🔓 {interaction.user.name} a terminé la sélection, accès aux règles accordé.")
-            # Désactiver les menus
+            # Désactiver tous les menus
             for item in self.children:
                 item.disabled = True
             await interaction.message.edit(view=self)
@@ -241,10 +220,20 @@ class RoleSelectView(discord.ui.View):
             )
             await interaction.followup.send(embed=embed_success, ephemeral=True)
 
+    async def on_timeout(self):
+        for item in self.children:
+            item.disabled = True
+        if hasattr(self, 'message'):
+            try:
+                await self.message.edit(view=self)
+            except:
+                pass
+
 # ------------------ VÉRIFICATION PAR RÉACTION (sur message existant) ------------------
 async def setup_verification_reaction():
     channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
     if not channel:
+        await send_log(f"❌ Salon des règles introuvable (ID {VERIFICATION_CHANNEL_ID})")
         return
     try:
         message = await channel.fetch_message(RULES_MESSAGE_ID)
@@ -253,8 +242,10 @@ async def setup_verification_reaction():
                 return
         await message.add_reaction(VERIFICATION_EMOJI)
         print(f"✅ Réaction {VERIFICATION_EMOJI} ajoutée au message des règles.")
+    except discord.NotFound:
+        await send_log(f"❌ Message des règles introuvable (ID {RULES_MESSAGE_ID})")
     except Exception as e:
-        print(f"Erreur lors de l'ajout de la réaction : {e}")
+        await send_log(f"❌ Erreur lors de l'ajout de la réaction : {e}")
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -263,9 +254,12 @@ async def on_raw_reaction_add(payload):
     if payload.channel_id != VERIFICATION_CHANNEL_ID or str(payload.emoji) != VERIFICATION_EMOJI or payload.message_id != RULES_MESSAGE_ID:
         return
     guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
     member = guild.get_member(payload.user_id)
     if not member:
         return
+    # Vérifier que le membre a bien fait la sélection (n'a plus le rôle "Non vérifié")
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
     if unverified_role and unverified_role in member.roles:
         await send_log(f"⚠️ {member.name} a essayé de réagir aux règles sans avoir fait la sélection de rôles.")
@@ -275,11 +269,14 @@ async def on_raw_reaction_add(payload):
         await member.add_roles(member_role)
         await send_log(f"✅ {member.name} a réagi aux règles et est devenu Membre.")
         # Retirer la réaction pour éviter les doublons
-        channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
-        msg = await channel.fetch_message(payload.message_id)
-        await msg.remove_reaction(VERIFICATION_EMOJI, member)
+        try:
+            channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
+            msg = await channel.fetch_message(payload.message_id)
+            await msg.remove_reaction(VERIFICATION_EMOJI, member)
+        except:
+            pass
 
-# ------------------ BIENVENUE (panneau dans le salon) ------------------
+# ------------------ BIENVENUE ------------------
 @bot.event
 async def on_member_join(member):
     # Anti-spam
@@ -314,18 +311,21 @@ async def on_member_join(member):
         except Exception as e:
             await send_log(f"⚠️ Erreur bienvenue : {e}")
 
-    # Panneau de sélection des rôles (message éphémère visible uniquement par le nouveau membre)
-    embed_select = discord.Embed(
-        title="🔧 Configuration de ton profil",
-        description=(
-            "Bienvenue sur le serveur ! Choisis les options ci-dessous pour accéder aux salons.\n\n"
-            "**Genre**\n**Âge**\n**Statut créatif**"
-        ),
-        color=0x2b2d31  # gris foncé (pavé noir)
-    )
-    view = RoleSelectView(member)
-    await canal_bienvenue.send(embed=embed_select, view=view, ephemeral=True)
-    await send_log(f"📨 Panneau de sélection envoyé à {member.name} dans {canal_bienvenue.mention}")
+        # Panneau de sélection des rôles (message visible par tous, mais seul le membre peut interagir)
+        embed_select = discord.Embed(
+            title="🔧 Configuration de ton profil",
+            description=(
+                "Bienvenue ! Pour accéder au serveur, choisis les options ci-dessous.\n\n"
+                "**Genre**\n**Âge**\n**Statut créatif**"
+            ),
+            color=0x2b2d31  # gris foncé
+        )
+        view = RoleSelectView(member)
+        msg = await canal_bienvenue.send(embed=embed_select, view=view)
+        view.message = msg
+        await send_log(f"📨 Panneau de sélection envoyé à {member.name} dans {canal_bienvenue.mention}")
+    else:
+        await send_log(f"❌ Salon de bienvenue introuvable (ID {ID_BIENVENUE})")
 
 # ------------------ AU REVOIR ------------------
 @bot.event
@@ -385,7 +385,6 @@ async def slash_ping(interaction: discord.Interaction):
     await interaction.response.send_message(f"Pong ! Latence : {round(bot.latency * 1000)}ms")
     await send_log(f"Commande /ping utilisée par {interaction.user.name}")
 
-# ------------------ COMMANDE ADMIN : recréer les rôles si besoin ------------------
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def setup_roles(ctx):
@@ -405,7 +404,7 @@ async def on_ready():
     print(f"✅ Bot connecté : {bot.user}")
     await bot.tree.sync()
     print("✅ Commandes slash synchronisées")
-    # Créer les rôles manquants sur chaque serveur où le bot est présent
+    # Créer les rôles manquants sur chaque serveur
     for guild in bot.guilds:
         await ensure_roles(guild)
     await setup_verification_reaction()
