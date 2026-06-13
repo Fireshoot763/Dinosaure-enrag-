@@ -140,10 +140,10 @@ async def ensure_onboarding(guild):
         await send_log(f"ℹ️ Salon 'choix-roles' déjà existant (ID: {onboarding_channel.id})")
     return verifying_role, onboarding_channel
 
-# ------------------ VUE PERSISTANTE (UNIQUE) ------------------
+# ------------------ VUE PERSISTANTE (MESSAGE UNIQUE) ------------------
 class OnboardingView(discord.ui.View):
     def __init__(self):
-        super().__init__(timeout=None)  # ne jamais expirer
+        super().__init__(timeout=None)
 
         self.gender_menu = discord.ui.Select(
             placeholder="Genre (optionnel)",
@@ -184,17 +184,15 @@ class OnboardingView(discord.ui.View):
         self.add_item(self.validate)
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        # Seuls les membres ayant le rôle "Nouveau" peuvent interagir
         new_role = interaction.guild.get_role(ROLE_NEW_ID)
         if not new_role or new_role not in interaction.user.roles:
-            await interaction.response.send_message("Tu n'es pas autorisé à utiliser ce panneau.", ephemeral=True)
+            await interaction.response.send_message("Tu n'es pas autorisé à utiliser ce panneau (tu as déjà validé ou tu n'es pas nouveau).", ephemeral=True)
             return False
         return True
 
     async def gender_callback(self, interaction: discord.Interaction):
         value = self.gender_menu.values[0]
         await self.assign_role(interaction, value, "Féminin", "Masculin")
-        # Ne pas désactiver le menu pour les autres
         await interaction.response.send_message(f"✅ Genre {value} enregistré.", ephemeral=True)
 
     async def age_callback(self, interaction: discord.Interaction):
@@ -217,7 +215,6 @@ class OnboardingView(discord.ui.View):
             await interaction.user.remove_roles(opposite)
 
     async def finalize(self, interaction: discord.Interaction):
-        """Valide le parcours (anonyme ou validation normale)"""
         new_role = interaction.guild.get_role(ROLE_NEW_ID)
         verifying_role = discord.utils.get(interaction.guild.roles, name="En attente")
         if new_role:
@@ -236,20 +233,18 @@ class OnboardingView(discord.ui.View):
     async def anonymous_callback(self, interaction: discord.Interaction):
         await self.finalize(interaction)
 
-# ------------------ GESTION DU MESSAGE UNIQUE ------------------
-async def ensure_onboarding_message(guild):
-    """Crée un unique message d'onboarding dans le salon #choix-roles s'il n'existe pas."""
+# ------------------ MESSAGE D'ONBOARDING UNIQUE ------------------
+async def create_onboarding_message(guild):
+    """Supprime tous les anciens messages du bot dans #choix-roles et en crée un nouveau."""
     channel = discord.utils.get(guild.text_channels, name="choix-roles")
     if not channel:
         await send_log("❌ Salon #choix-roles introuvable.")
-        return
-    # Chercher un message du bot dans ce salon
-    async for message in channel.history(limit=50):
+        return False
+    # Nettoyage
+    async for message in channel.history(limit=200):
         if message.author == bot.user:
-            # On a déjà un message, ne rien faire
-            await send_log("ℹ️ Message d'onboarding déjà existant.")
-            return
-    # Sinon, créer le message
+            await message.delete()
+    # Création
     embed = discord.Embed(
         title="🔧 Configuration de ton profil",
         description=(
@@ -261,7 +256,8 @@ async def ensure_onboarding_message(guild):
     )
     view = OnboardingView()
     await channel.send(embed=embed, view=view)
-    await send_log("✅ Message d'onboarding unique créé.")
+    await send_log("✅ Message d'onboarding unique créé (anciens supprimés).")
+    return True
 
 # ------------------ VÉRIFICATION PAR RÉACTION ------------------
 @bot.event
@@ -306,7 +302,6 @@ async def on_member_join(member):
         return
     recent_joins[member.id] = now
 
-    # Ajouter le rôle "Nouveau"
     new_role = member.guild.get_role(ROLE_NEW_ID)
     if new_role:
         try:
@@ -317,7 +312,6 @@ async def on_member_join(member):
     else:
         await send_log(f"❌ Rôle 'Nouveau' (ID {ROLE_NEW_ID}) introuvable.")
 
-    # Message de bienvenue public (optionnel)
     welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
     if welcome_channel:
         embed = discord.Embed(
@@ -330,7 +324,7 @@ async def on_member_join(member):
             embed.set_thumbnail(url=member.avatar.url)
         await welcome_channel.send(embed=embed)
 
-    # Pas besoin d'envoyer un nouveau message d'onboarding, il existe déjà
+    # Pas besoin d'envoyer de nouveau message d'onboarding : il existe déjà
 
 # ------------------ AUTRES ÉVÉNEMENTS ------------------
 @bot.event
@@ -394,8 +388,8 @@ async def setup_perms(ctx):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def create_onboarding_message(ctx):
-    """Crée (ou recrée) le message d'onboarding unique."""
-    await ensure_onboarding_message(ctx.guild)
+    """Recrée le message d'onboarding unique (nettoyage + nouveau)."""
+    await create_onboarding_message(ctx.guild)
     await ctx.send("✅ Message d'onboarding recréé.", ephemeral=True)
 
 @bot.event
@@ -422,8 +416,8 @@ async def on_ready():
         await create_optional_roles(guild)
         await ensure_onboarding(guild)
         await fix_channel_permissions(guild)
-        await ensure_onboarding_message(guild)   # Crée le message unique s'il n'existe pas
-    await send_log("🚀 Bot démarré (message unique d'onboarding)")
+        await create_onboarding_message(guild)   # <-- force la recréation du message interactif
+    await send_log("🚀 Bot redémarré avec message d'onboarding unique et interactif")
 
 async def main():
     asyncio.create_task(start_http_server())
