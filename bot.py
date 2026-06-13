@@ -1,16 +1,12 @@
 import discord
 from discord.ext import commands
-from PIL import Image
-import io
 import os
-from datetime import datetime
 import asyncio
 from aiohttp import web
 import time
-import re
 
 # ------------------ CONFIGURATION ------------------
-# IDs des salons
+# Remplace par les IDs de ton serveur
 ID_BIENVENUE = 1512009964988661861
 ID_AUREVOIR = 1512010175907631104
 VIDEO_CHANNEL_ID = 1513174573632454817
@@ -18,26 +14,20 @@ LOG_CHANNEL_ID = 1512010693665099876
 VERIFICATION_CHANNEL_ID = 1511654306414198805   # salon #‼️règles‼️
 RULES_MESSAGE_ID = 1511657834192961598          # message des règles (avec réaction ✅)
 
-# IDs des rôles existants
 UNVERIFIED_ROLE_ID = 1513799071029137499        # "Non vérifié"
 MEMBER_ROLE_ID = 1512012606435491911            # "Membres"
 
-# Noms des rôles pour la sélection (le bot cherchera par nom)
-ROLE_NAMES = {
-    "féminin": "Féminin",
-    "masculin": "Masculin",
-    "majeur": "Majeur",
-    "mineur": "Mineur",
-    "dessinateur": "Dessinateur",
-    "animateur": "Animateur"
-}
+AUTHORIZED_USER_ID = 1274426216413139007        # personne autorisée pour les vidéos
 
-# ID de la personne autorisée pour les vidéos
-AUTHORIZED_USER_ID = 1274426216413139007
-
-# Images de fond
-FOND_BIENVENUE = "IMG_1299.png"
-FOND_AUREVOIR = "IMG_1319.png"
+# Noms des rôles pour la sélection (création automatique)
+ROLES_TO_CREATE = [
+    ("Féminin", discord.Colour.pink()),
+    ("Masculin", discord.Colour.blue()),
+    ("Majeur", discord.Colour.green()),
+    ("Mineur", discord.Colour.gold()),
+    ("Dessinateur", discord.Colour.purple()),
+    ("Animateur", discord.Colour.orange())
+]
 
 # Anti-spam
 command_cooldown = {}
@@ -45,6 +35,7 @@ COOLDOWN_SECONDS = 5
 recent_joins = {}
 recent_leaves = {}
 SPAM_SECONDS = 10
+
 VERIFICATION_EMOJI = "✅"
 
 # ------------------ INTENTS ------------------
@@ -67,11 +58,11 @@ async def send_log(message: str):
                 message = message[:1990] + "..."
             await channel.send(f"📋 {message}")
         except Exception as e:
-            print(f"Erreur log Discord : {e}")
+            print(f"Erreur log : {e}")
     else:
         print(f"Log (salon introuvable) : {message}")
 
-# ------------------ SERVEUR HTTP ------------------
+# ------------------ SERVEUR HTTP POUR RENDER ------------------
 async def handle_health(request):
     return web.Response(text="OK")
 
@@ -84,44 +75,21 @@ async def start_http_server():
     await site.start()
     print("✅ Serveur HTTP sur le port 8080")
 
-# ------------------ IMAGES ------------------
-def ajouter_bordure(image_bytes: bytes, bordure_px: int = 15) -> bytes:
-    img = Image.open(io.BytesIO(image_bytes))
-    img_bordure = Image.new("RGB", (img.width + 2*bordure_px, img.height + 2*bordure_px), (0,0,0))
-    img_bordure.paste(img, (bordure_px, bordure_px))
-    with io.BytesIO() as buf:
-        img_bordure.save(buf, format="PNG")
-        buf.seek(0)
-        return buf.getvalue()
-
-async def lire_image(fond_path: str) -> bytes:
-    with open(fond_path, "rb") as f:
-        return f.read()
-
 # ------------------ CRÉATION AUTO DES RÔLES ------------------
 async def ensure_roles(guild):
-    """Crée les rôles manquants (Féminin, Masculin, etc.) si besoin."""
     created = []
-    required = [
-        ("Féminin", discord.Colour.pink()),
-        ("Masculin", discord.Colour.blue()),
-        ("Majeur", discord.Colour.green()),
-        ("Mineur", discord.Colour.gold()),
-        ("Dessinateur", discord.Colour.purple()),
-        ("Animateur", discord.Colour.orange())
-    ]
-    for name, colour in required:
+    for name, colour in ROLES_TO_CREATE:
         role = discord.utils.get(guild.roles, name=name)
         if not role:
             try:
-                role = await guild.create_role(name=name, colour=colour, reason="Création auto pour l'onboarding")
+                role = await guild.create_role(name=name, colour=colour, reason="Création auto onboarding")
                 created.append(name)
             except Exception as e:
                 await send_log(f"❌ Erreur création rôle {name} : {e}")
     if created:
-        await send_log(f"✅ Rôles créés automatiquement : {', '.join(created)}")
+        await send_log(f"✅ Rôles créés : {', '.join(created)}")
 
-# ------------------ VUE À BOUTONS POUR LA SÉLECTION (EN MP) ------------------
+# ------------------ VUE À BOUTONS POUR LA SÉLECTION (MP) ------------------
 class RoleSelectView(discord.ui.View):
     def __init__(self, member: discord.Member):
         super().__init__(timeout=300)
@@ -156,41 +124,49 @@ class RoleSelectView(discord.ui.View):
     async def handle_choice(self, interaction: discord.Interaction, category: str, chosen: str, opposite: str, button: discord.ui.Button):
         if interaction.user.id != self.member.id:
             return await interaction.response.send_message("Ce panneau ne vous est pas destiné.", ephemeral=True)
-        # Attribuer le rôle choisi et retirer l'opposé
+        
         guild = interaction.guild
         role_chosen = discord.utils.get(guild.roles, name=chosen)
         role_opposite = discord.utils.get(guild.roles, name=opposite)
+        
         if not role_chosen:
-            await interaction.response.send_message(f"❌ Le rôle {chosen} est introuvable. Contacte un administrateur.", ephemeral=True)
+            await interaction.response.send_message(f"❌ Le rôle {chosen} est introuvable. Contacte un admin.", ephemeral=True)
             return
+        
+        # Ajouter le rôle choisi
         await interaction.user.add_roles(role_chosen)
         await send_log(f"➕ {interaction.user.name} a choisi {chosen}")
+        
+        # Retirer le rôle opposé s'il est présent
         if role_opposite and role_opposite in interaction.user.roles:
             await interaction.user.remove_roles(role_opposite)
-        # Mettre à jour les choix
+        
+        # Mémoriser le choix
         self.choices[category] = chosen
-        # Désactiver le bouton correspondant
         button.disabled = True
         # Désactiver le bouton opposé
         for child in self.children:
             if child.custom_id == f"{category}_{opposite.lower()}":
                 child.disabled = True
                 break
+        
         await interaction.response.edit_message(view=self)
-        # Vérifier si tous les choix sont faits
+        
+        # Si tous les choix sont faits
         if all(self.choices.values()):
-            # Retirer le rôle "Non vérifié"
             unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
             if unverified_role and unverified_role in interaction.user.roles:
                 await interaction.user.remove_roles(unverified_role)
                 await send_log(f"🔓 {interaction.user.name} a terminé la sélection, accès aux règles accordé.")
+            
             # Désactiver tous les boutons
             for child in self.children:
                 child.disabled = True
             await self.message.edit(view=self)
+            
             embed_success = discord.Embed(
                 title="✅ Parcours terminé !",
-                description=f"Rends-toi maintenant dans le salon <#{VERIFICATION_CHANNEL_ID}> et réagis avec {VERIFICATION_EMOJI} sur le message des règles pour accéder au serveur.",
+                description=f"Rends-toi dans le salon <#{VERIFICATION_CHANNEL_ID}> et réagis avec {VERIFICATION_EMOJI} sur le message des règles pour accéder au serveur.",
                 color=0x00ff00
             )
             await interaction.followup.send(embed=embed_success, ephemeral=True)
@@ -205,7 +181,7 @@ class RoleSelectView(discord.ui.View):
             except:
                 pass
 
-# ------------------ VÉRIFICATION PAR RÉACTION (inchangée) ------------------
+# ------------------ VÉRIFICATION PAR RÉACTION (message existant) ------------------
 async def setup_verification_reaction():
     channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
     if not channel:
@@ -213,15 +189,16 @@ async def setup_verification_reaction():
         return
     try:
         message = await channel.fetch_message(RULES_MESSAGE_ID)
+        # Ajouter la réaction si elle n'existe pas
         for reaction in message.reactions:
             if str(reaction.emoji) == VERIFICATION_EMOJI:
                 return
         await message.add_reaction(VERIFICATION_EMOJI)
-        print(f"✅ Réaction {VERIFICATION_EMOJI} ajoutée au message des règles.")
+        await send_log(f"✅ Réaction {VERIFICATION_EMOJI} ajoutée au message des règles.")
     except discord.NotFound:
         await send_log(f"❌ Message des règles introuvable (ID {RULES_MESSAGE_ID})")
     except Exception as e:
-        await send_log(f"❌ Erreur lors de l'ajout de la réaction : {e}")
+        await send_log(f"❌ Erreur ajout réaction : {e}")
 
 @bot.event
 async def on_raw_reaction_add(payload):
@@ -229,25 +206,34 @@ async def on_raw_reaction_add(payload):
         return
     if payload.channel_id != VERIFICATION_CHANNEL_ID or str(payload.emoji) != VERIFICATION_EMOJI or payload.message_id != RULES_MESSAGE_ID:
         return
+    
     guild = bot.get_guild(payload.guild_id)
     if not guild:
         return
     member = guild.get_member(payload.user_id)
     if not member:
         return
+    
+    # Vérifier si le membre a encore le rôle Non vérifié
     unverified_role = guild.get_role(UNVERIFIED_ROLE_ID)
     if unverified_role and unverified_role in member.roles:
-        await send_log(f"⚠️ {member.name} a essayé de réagir aux règles sans avoir fait la sélection de rôles.")
-        # Envoyer un MP pour rappeler la sélection
+        await send_log(f"⚠️ {member.name} a essayé de réagir aux règles sans avoir fait la sélection.")
+        # Envoyer un MP pour rappeler
         try:
-            await member.send(f"Merci de faire d'abord la sélection des rôles (tu as reçu un message privé) avant d'accepter les règles.")
+            await member.send("Merci de faire d'abord la sélection des rôles (tu as reçu un message privé) avant d'accepter les règles.")
         except:
             pass
+        # Retirer sa réaction
+        channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
+        msg = await channel.fetch_message(payload.message_id)
+        await msg.remove_reaction(VERIFICATION_EMOJI, member)
         return
+    
     member_role = guild.get_role(MEMBER_ROLE_ID)
     if member_role:
         await member.add_roles(member_role)
         await send_log(f"✅ {member.name} a réagi aux règles et est devenu Membre.")
+        # Retirer la réaction pour éviter les doublons
         try:
             channel = bot.get_channel(VERIFICATION_CHANNEL_ID)
             msg = await channel.fetch_message(payload.message_id)
@@ -275,31 +261,37 @@ async def on_member_join(member):
     else:
         await send_log(f"❌ Rôle Non vérifié (ID {UNVERIFIED_ROLE_ID}) introuvable.")
 
-    # Envoyer le message de bienvenue dans le salon dédié
+    # Message public de bienvenue (image, embed)
     canal_bienvenue = bot.get_channel(ID_BIENVENUE)
     if canal_bienvenue:
         try:
-            img_bytes = await lire_image(FOND_BIENVENUE)
-            img_bordure = ajouter_bordure(img_bytes)
-            texte = f"Oh ! **{member.display_name}** est un/une potentiel(le) dessinateur/rice et a rejoint ce serveur, bonne visite !"
-            embed_bv = discord.Embed(title="🎨 Bienvenue !", description=texte, color=0x000000, timestamp=datetime.now())
-            embed_bv.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
-            await canal_bienvenue.send(embed=embed_bv, file=discord.File(io.BytesIO(img_bordure), filename="welcome.png"))
-            await send_log(f"✅ Message de bienvenue envoyé pour {member.name}")
+            # Ici, tu peux utiliser ton image de fond et l'embed
+            embed_bv = discord.Embed(
+                title="🎨 Bienvenue !",
+                description=f"Oh ! **{member.display_name}** a rejoint le serveur ! Bonne visite !",
+                color=0x000000,
+                timestamp=datetime.now()
+            )
+            if member.avatar:
+                embed_bv.set_thumbnail(url=member.avatar.url)
+            await canal_bienvenue.send(embed=embed_bv)
+            await send_log(f"✅ Message public de bienvenue pour {member.name}")
         except Exception as e:
-            await send_log(f"⚠️ Erreur bienvenue : {e}")
+            await send_log(f"⚠️ Erreur bienvenue publique : {e}")
+    else:
+        await send_log(f"❌ Salon bienvenue introuvable (ID {ID_BIENVENUE})")
 
-    # Envoyer le panneau de sélection en message privé
+    # Envoyer le panneau de sélection en MP
     try:
         embed_select = discord.Embed(
             title="🔧 Configuration de ton profil",
-            description="Bienvenue sur le serveur ! Choisis les options ci-dessous pour accéder aux salons.\n\nClique sur un bouton par catégorie :",
+            description="Bienvenue sur le serveur ! Pour accéder aux salons, sélectionne une option par catégorie :\n\n**Genre**\n**Âge**\n**Statut créatif**",
             color=0x2b2d31
         )
         view = RoleSelectView(member)
         msg = await member.send(embed=embed_select, view=view)
         view.message = msg
-        await send_log(f"📨 Panneau de sélection (boutons) envoyé en MP à {member.name}")
+        await send_log(f"📨 Panneau de sélection envoyé en MP à {member.name}")
     except discord.Forbidden:
         await send_log(f"⚠️ Impossible d'envoyer un MP à {member.name} (DM fermés).")
     except Exception as e:
@@ -315,18 +307,16 @@ async def on_member_remove(member):
     recent_leaves[member.id] = now
     canal = bot.get_channel(ID_AUREVOIR)
     if canal:
-        try:
-            img_bytes = await lire_image(FOND_AUREVOIR)
-            img_bordure = ajouter_bordure(img_bytes)
-            texte = f"Oh... **{member.display_name}**, un/une potentiel(le) dessinateur/rice, a quitté ce serveur, en espérant que tu deviendras un(e) artiste."
-            embed = discord.Embed(title="👋 Au revoir...", description=texte, color=0x000000, timestamp=datetime.now())
-            embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
-            await canal.send(embed=embed, file=discord.File(io.BytesIO(img_bordure), filename="goodbye.png"))
-            await send_log(f"✅ Message d'au revoir envoyé pour {member.name}")
-        except Exception as e:
-            await send_log(f"⚠️ Erreur au revoir : {e}")
+        embed = discord.Embed(
+            title="👋 Au revoir...",
+            description=f"Oh... {member.display_name} a quitté le serveur, en espérant qu'il/elle deviendra un(e) artiste.",
+            color=0x000000,
+            timestamp=datetime.now()
+        )
+        await canal.send(embed=embed)
+        await send_log(f"✅ Message d'au revoir pour {member.name}")
 
-# ------------------ REDIRECTION VIDÉOS ------------------
+# ------------------ REDIRECTION VIDÉOS (inchangée) ------------------
 @bot.listen('on_message')
 async def on_message_listener(message):
     if message.author == bot.user or message.author.id != AUTHORIZED_USER_ID:
@@ -369,11 +359,11 @@ async def setup_roles(ctx):
     await ensure_roles(ctx.guild)
     await ctx.send("✅ Vérification/création des rôles effectuée.", ephemeral=True)
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    await send_log(f"❌ Erreur dans la commande `{ctx.command}` : {error}")
+@bot.command()
+@commands.has_permissions(administrator=True)
+async def refresh_verification(ctx):
+    await setup_verification_reaction()
+    await ctx.send("✅ Réaction ajoutée au message des règles.", ephemeral=True)
 
 # ------------------ DÉMARRAGE ------------------
 @bot.event
@@ -384,7 +374,7 @@ async def on_ready():
     for guild in bot.guilds:
         await ensure_roles(guild)
     await setup_verification_reaction()
-    await send_log("🚀 Bot démarré (sélection des rôles en MP)")
+    await send_log("🚀 Bot démarré (sélection en MP + vérification par réaction)")
 
 async def main():
     asyncio.create_task(start_http_server())
