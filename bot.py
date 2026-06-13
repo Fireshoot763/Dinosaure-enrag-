@@ -70,7 +70,7 @@ async def start_http_server():
     await site.start()
     print("✅ Serveur HTTP sur le port 8080")
 
-# ------------------ GESTION DES PERMISSIONS ------------------
+# ------------------ PERMISSIONS ------------------
 async def fix_channel_permissions(guild):
     new_role = guild.get_role(ROLE_NEW_ID)
     member_role = guild.get_role(ROLE_MEMBER_ID)
@@ -142,7 +142,6 @@ async def ensure_onboarding(guild):
 
 # ------------------ MESSAGE UNIQUE AVEC RÉACTIONS ------------------
 async def create_onboarding_message(guild):
-    """Crée un message unique avec des réactions pour le choix des rôles."""
     try:
         channel = discord.utils.get(guild.text_channels, name="choix-roles")
         if not channel:
@@ -171,7 +170,6 @@ async def create_onboarding_message(guild):
         )
         message = await channel.send(embed=embed)
 
-        # Ajouter toutes les réactions
         emojis = ["♀️", "♂️", "🔞", "🧒", "✏️", "🎬", "🤐", "✅"]
         for emoji in emojis:
             await message.add_reaction(emoji)
@@ -182,10 +180,9 @@ async def create_onboarding_message(guild):
         await send_log(f"❌ Erreur lors de la création du message d'onboarding : {e}")
         return False
 
-# ------------------ GESTION DES RÉACTIONS (CHOIX RÔLES) ------------------
+# ------------------ FONCTIONS D'AIDE POUR LES RÔLES ------------------
 async def assign_role(member, role_name):
-    guild = member.guild
-    role = discord.utils.get(guild.roles, name=role_name)
+    role = discord.utils.get(member.guild.roles, name=role_name)
     if role:
         await member.add_roles(role)
         await send_log(f"➕ {member.name} a obtenu le rôle {role_name}")
@@ -193,133 +190,12 @@ async def assign_role(member, role_name):
     return False
 
 async def remove_role(member, role_name):
-    guild = member.guild
-    role = discord.utils.get(guild.roles, name=role_name)
+    role = discord.utils.get(member.guild.roles, name=role_name)
     if role and role in member.roles:
         await member.remove_roles(role)
         await send_log(f"➖ {member.name} a perdu le rôle {role_name}")
 
-@bot.event
-async def on_raw_reaction_add(payload):
-    if payload.user_id == bot.user.id:
-        return
-
-    # Vérifier que la réaction est dans le salon #choix-roles
-    guild = bot.get_guild(payload.guild_id)
-    if not guild:
-        return
-    channel = guild.get_channel(payload.channel_id)
-    if not channel or channel.name != "choix-roles":
-        return
-
-    member = guild.get_member(payload.user_id)
-    if not member:
-        return
-
-    # Vérifier que le membre a le rôle "Nouveau"
-    new_role = guild.get_role(ROLE_NEW_ID)
-    if not new_role or new_role not in member.roles:
-        # L'utilisateur n'est pas en onboarding, on ignore
-        return
-
-    emoji = str(payload.emoji)
-    # Gestion des rôles selon l'emoji
-    if emoji == "♀️":
-        await assign_role(member, "Féminin")
-        await remove_role(member, "Masculin")
-    elif emoji == "♂️":
-        await assign_role(member, "Masculin")
-        await remove_role(member, "Féminin")
-    elif emoji == "🔞":
-        await assign_role(member, "Majeur")
-        await remove_role(member, "Mineur")
-    elif emoji == "🧒":
-        await assign_role(member, "Mineur")
-        await remove_role(member, "Majeur")
-    elif emoji == "✏️":
-        await assign_role(member, "Dessinateur")
-        await remove_role(member, "Animateur")
-    elif emoji == "🎬":
-        await assign_role(member, "Animateur")
-        await remove_role(member, "Dessinateur")
-    elif emoji == "🤐":
-        # Anonyme : ne rien faire (juste un message de confirmation)
-        try:
-            await member.send("Tu as choisi de rester anonyme. Aucun rôle ne t'a été attribué.")
-        except:
-            pass
-        await send_log(f"🤐 {member.name} a choisi l'anonymat.")
-    elif emoji == "✅":
-        # Validation : passage du rôle Nouveau à En attente
-        verifying_role = discord.utils.get(guild.roles, name="En attente")
-        if verifying_role:
-            await member.remove_roles(new_role)
-            await member.add_roles(verifying_role)
-            await send_log(f"🔁 {member.name} a validé son onboarding → rôle 'En attente'")
-            try:
-                await member.send(f"✅ Parcours validé ! Rends-toi dans <#{RULES_CHANNEL_ID}> et réagis avec {VERIFICATION_EMOJI} pour accéder au serveur.")
-            except:
-                pass
-    else:
-        return
-
-    # Retirer la réaction de l'utilisateur (pour éviter l'encombrement)
-    try:
-        msg = await channel.fetch_message(payload.message_id)
-        await msg.remove_reaction(emoji, member)
-    except:
-        pass
-
-# ------------------ VÉRIFICATION FINALE PAR RÉACTION DANS #règles ------------------
-@bot.event
-async def on_raw_reaction_add_rules(payload):
-    if payload.user_id == bot.user.id:
-        return
-    if payload.channel_id != RULES_CHANNEL_ID or str(payload.emoji) != VERIFICATION_EMOJI:
-        return
-
-    guild = bot.get_guild(payload.guild_id)
-    if not guild:
-        return
-    member = guild.get_member(payload.user_id)
-    if not member:
-        return
-
-    verifying_role = discord.utils.get(guild.roles, name="En attente")
-    if not verifying_role or verifying_role not in member.roles:
-        await send_log(f"⚠️ {member.name} a réagi sans le rôle 'En attente'.")
-        return
-
-    member_role = guild.get_role(ROLE_MEMBER_ID)
-    if member_role:
-        await member.add_roles(member_role)
-        await send_log(f"✅ {member.name} a réagi → devient Membre.")
-    if verifying_role:
-        await member.remove_roles(verifying_role)
-
-    # Retirer la réaction pour éviter les doublons
-    try:
-        channel = bot.get_channel(RULES_CHANNEL_ID)
-        msg = await channel.fetch_message(payload.message_id)
-        await msg.remove_reaction(VERIFICATION_EMOJI, member)
-    except:
-        pass
-
-# On fusionne les deux événements réaction
-@bot.event
-async def on_raw_reaction_add(payload):
-    # On appelle les deux traitements
-    await on_raw_reaction_add_onboarding(payload)
-    await on_raw_reaction_add_rules(payload)
-
-async def on_raw_reaction_add_onboarding(payload):
-    # (le code de la première partie)
-    # Je vais le recopier ici pour éviter la duplication. Mais pour simplifier, je vais tout mettre dans un seul événement avec des conditions.
-    # En pratique, on peut garder la structure précédente. Je vais réécrire proprement.
-
-# Pour éviter la duplication, je vais regrouper. Je réécris la fonction unique finale ci-dessous.
-
-# ------------------ ÉVÉNEMENT UNIQUE POUR LES RÉACTIONS ------------------
+# ------------------ ÉVÉNEMENT RÉACTION UNIQUE ------------------
 @bot.event
 async def on_raw_reaction_add(payload):
     if payload.user_id == bot.user.id:
@@ -331,12 +207,11 @@ async def on_raw_reaction_add(payload):
     member = guild.get_member(payload.user_id)
     if not member:
         return
-
     channel = guild.get_channel(payload.channel_id)
     if not channel:
         return
 
-    # Cas 1 : réaction dans #choix-roles
+    # Cas 1 : salon #choix-roles (onboarding)
     if channel.name == "choix-roles":
         new_role = guild.get_role(ROLE_NEW_ID)
         if not new_role or new_role not in member.roles:
@@ -387,7 +262,7 @@ async def on_raw_reaction_add(payload):
         except:
             pass
 
-    # Cas 2 : réaction dans #règles
+    # Cas 2 : salon #règles (vérification finale)
     elif payload.channel_id == RULES_CHANNEL_ID and str(payload.emoji) == VERIFICATION_EMOJI:
         verifying_role = discord.utils.get(guild.roles, name="En attente")
         if not verifying_role or verifying_role not in member.roles:
@@ -436,7 +311,7 @@ async def on_member_join(member):
             embed.set_thumbnail(url=member.avatar.url)
         await welcome_channel.send(embed=embed)
 
-# ------------------ AUTRES ÉVÉNEMENTS ------------------
+# ------------------ DÉPART D'UN MEMBRE ------------------
 @bot.event
 async def on_member_remove(member):
     now = time.time()
@@ -454,6 +329,7 @@ async def on_member_remove(member):
         )
         await channel.send(embed=embed)
 
+# ------------------ REDIRECTION VIDÉOS ------------------
 @bot.listen('on_message')
 async def on_message_listener(message):
     if message.author == bot.user or message.author.id != AUTHORIZED_USER_ID:
@@ -467,6 +343,7 @@ async def on_message_listener(message):
             await send_log("❌ Salon vidéo introuvable")
     await bot.process_commands(message)
 
+# ------------------ COMMANDES ------------------
 @bot.command()
 async def ping(ctx):
     user_id = ctx.author.id
@@ -498,7 +375,6 @@ async def setup_perms(ctx):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def create_onboarding_message(ctx):
-    """Recrée le message d'onboarding avec les réactions."""
     await create_onboarding_message(ctx.guild)
     await ctx.send("✅ Message d'onboarding recréé.", ephemeral=True)
 
@@ -508,6 +384,7 @@ async def on_command_error(ctx, error):
         return
     await send_log(f"❌ Erreur commande {ctx.command}: {error}")
 
+# ------------------ CRÉATION DES RÔLES OPTIONNELS ------------------
 async def create_optional_roles(guild):
     for name, colour, _ in ROLES_TO_CREATE:
         if not discord.utils.get(guild.roles, name=name):
@@ -517,6 +394,7 @@ async def create_optional_roles(guild):
             except Exception as e:
                 await send_log(f"❌ Erreur création rôle {name} : {e}")
 
+# ------------------ DÉMARRAGE ------------------
 @bot.event
 async def on_ready():
     print(f"✅ Bot connecté : {bot.user}")
@@ -526,9 +404,8 @@ async def on_ready():
         await create_optional_roles(guild)
         await ensure_onboarding(guild)
         await fix_channel_permissions(guild)
-        # Création du message d'onboarding (avec logs d'erreur)
         await create_onboarding_message(guild)
-    await send_log("🚀 Bot démarré avec système de réactions (plus robuste)")
+    await send_log("🚀 Bot démarré avec système de réactions (robuste)")
 
 async def main():
     asyncio.create_task(start_http_server())
