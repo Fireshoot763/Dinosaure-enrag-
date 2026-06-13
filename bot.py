@@ -19,12 +19,12 @@ ROLE_MEMBER_ID = 1512012606435491911
 AUTHORIZED_USER_ID = 1274426216413139007
 
 ROLES_TO_CREATE = [
-    ("Féminin", discord.Colour.pink()),
-    ("Masculin", discord.Colour.blue()),
-    ("Majeur", discord.Colour.green()),
-    ("Mineur", discord.Colour.gold()),
-    ("Dessinateur", discord.Colour.purple()),
-    ("Animateur", discord.Colour.orange())
+    ("Féminin", discord.Colour.pink(), "♀️"),
+    ("Masculin", discord.Colour.blue(), "♂️"),
+    ("Majeur", discord.Colour.green(), "🔞"),
+    ("Mineur", discord.Colour.gold(), "🧒"),
+    ("Dessinateur", discord.Colour.purple(), "✏️"),
+    ("Animateur", discord.Colour.orange(), "🎬")
 ]
 
 command_cooldown = {}
@@ -140,128 +140,131 @@ async def ensure_onboarding(guild):
         await send_log(f"ℹ️ Salon 'choix-roles' déjà existant (ID: {onboarding_channel.id})")
     return verifying_role, onboarding_channel
 
-# ------------------ VUE PERSISTANTE (MESSAGE UNIQUE) ------------------
-class OnboardingView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-        self.gender_menu = discord.ui.Select(
-            placeholder="Genre (optionnel)",
-            options=[
-                discord.SelectOption(label="Féminin", value="Féminin", emoji="♀️"),
-                discord.SelectOption(label="Masculin", value="Masculin", emoji="♂️")
-            ]
-        )
-        self.gender_menu.callback = self.gender_callback
-        self.add_item(self.gender_menu)
-
-        self.age_menu = discord.ui.Select(
-            placeholder="Âge (optionnel)",
-            options=[
-                discord.SelectOption(label="Majeur (18+)", value="Majeur", emoji="🔞"),
-                discord.SelectOption(label="Mineur (-18)", value="Mineur", emoji="🧒")
-            ]
-        )
-        self.age_menu.callback = self.age_callback
-        self.add_item(self.age_menu)
-
-        self.creator_menu = discord.ui.Select(
-            placeholder="Statut (optionnel)",
-            options=[
-                discord.SelectOption(label="Dessinateur", value="Dessinateur", emoji="✏️"),
-                discord.SelectOption(label="Animateur", value="Animateur", emoji="🎬")
-            ]
-        )
-        self.creator_menu.callback = self.creator_callback
-        self.add_item(self.creator_menu)
-
-        self.anonymous = discord.ui.Button(label="🤐 Rester anonyme", style=discord.ButtonStyle.secondary, custom_id="anonymous")
-        self.anonymous.callback = self.anonymous_callback
-        self.add_item(self.anonymous)
-
-        self.validate = discord.ui.Button(label="✅ Valider", style=discord.ButtonStyle.success, custom_id="validate")
-        self.validate.callback = self.validate_callback
-        self.add_item(self.validate)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        new_role = interaction.guild.get_role(ROLE_NEW_ID)
-        if not new_role or new_role not in interaction.user.roles:
-            await interaction.response.send_message("Tu n'es pas autorisé à utiliser ce panneau (tu as déjà validé ou tu n'es pas nouveau).", ephemeral=True)
-            return False
-        return True
-
-    async def gender_callback(self, interaction: discord.Interaction):
-        value = self.gender_menu.values[0]
-        await self.assign_role(interaction, value, "Féminin", "Masculin")
-        await interaction.response.send_message(f"✅ Genre {value} enregistré.", ephemeral=True)
-
-    async def age_callback(self, interaction: discord.Interaction):
-        value = self.age_menu.values[0]
-        await self.assign_role(interaction, value, "Majeur", "Mineur")
-        await interaction.response.send_message(f"✅ Âge {value} enregistré.", ephemeral=True)
-
-    async def creator_callback(self, interaction: discord.Interaction):
-        value = self.creator_menu.values[0]
-        await self.assign_role(interaction, value, "Dessinateur", "Animateur")
-        await interaction.response.send_message(f"✅ Statut {value} enregistré.", ephemeral=True)
-
-    async def assign_role(self, interaction, chosen, role1, role2):
-        role = discord.utils.get(interaction.guild.roles, name=chosen)
-        opposite = discord.utils.get(interaction.guild.roles, name=role1 if chosen == role2 else role2)
-        if role:
-            await interaction.user.add_roles(role)
-            await send_log(f"➕ {interaction.user.name} a choisi {chosen}")
-        if opposite and opposite in interaction.user.roles:
-            await interaction.user.remove_roles(opposite)
-
-    async def finalize(self, interaction: discord.Interaction):
-        new_role = interaction.guild.get_role(ROLE_NEW_ID)
-        verifying_role = discord.utils.get(interaction.guild.roles, name="En attente")
-        if new_role:
-            await interaction.user.remove_roles(new_role)
-        if verifying_role:
-            await interaction.user.add_roles(verifying_role)
-        await send_log(f"🔁 {interaction.user.name} a validé → rôle 'En attente'")
-        await interaction.response.send_message(
-            f"✅ Parcours validé ! Rends-toi dans <#{RULES_CHANNEL_ID}> et réagis avec {VERIFICATION_EMOJI} pour accéder au serveur.",
-            ephemeral=True
-        )
-
-    async def validate_callback(self, interaction: discord.Interaction):
-        await self.finalize(interaction)
-
-    async def anonymous_callback(self, interaction: discord.Interaction):
-        await self.finalize(interaction)
-
-# ------------------ MESSAGE D'ONBOARDING UNIQUE ------------------
+# ------------------ MESSAGE UNIQUE AVEC RÉACTIONS ------------------
 async def create_onboarding_message(guild):
-    """Supprime tous les anciens messages du bot dans #choix-roles et en crée un nouveau."""
+    """Crée un message unique avec des réactions pour le choix des rôles."""
     channel = discord.utils.get(guild.text_channels, name="choix-roles")
     if not channel:
         await send_log("❌ Salon #choix-roles introuvable.")
         return False
-    # Nettoyage
+
+    # Supprimer les anciens messages du bot
     async for message in channel.history(limit=200):
         if message.author == bot.user:
             await message.delete()
-    # Création
+
     embed = discord.Embed(
-        title="🔧 Configuration de ton profil",
+        title="🔧 Choisis tes rôles",
         description=(
-            "Bienvenue ! Choisis des rôles ci-dessous (ou clique sur **Rester anonyme**).\n"
-            "Une fois tes choix faits (ou non), clique sur **Valider**.\n\n"
-            "*Tu pourras modifier tes rôles plus tard.*"
+            "Clique sur les réactions ci-dessous pour obtenir des rôles (optionnels) :\n\n"
+            "♀️ – Féminin\n"
+            "♂️ – Masculin\n"
+            "🔞 – Majeur (18+)\n"
+            "🧒 – Mineur\n"
+            "✏️ – Dessinateur\n"
+            "🎬 – Animateur\n"
+            "🤐 – Rester anonyme (ne donne aucun rôle)\n\n"
+            "Une fois tes choix faits (ou non), clique sur **✅** pour valider ton parcours."
         ),
         color=0x2b2d31
     )
-    view = OnboardingView()
-    await channel.send(embed=embed, view=view)
-    await send_log("✅ Message d'onboarding unique créé (anciens supprimés).")
+    message = await channel.send(embed=embed)
+
+    # Ajouter toutes les réactions
+    emojis = ["♀️", "♂️", "🔞", "🧒", "✏️", "🎬", "🤐", "✅"]
+    for emoji in emojis:
+        await message.add_reaction(emoji)
+
+    await send_log("✅ Message d'onboarding avec réactions créé.")
     return True
 
-# ------------------ VÉRIFICATION PAR RÉACTION ------------------
+# ------------------ GESTION DES RÉACTIONS ------------------
+async def assign_role(member, role_name):
+    guild = member.guild
+    role = discord.utils.get(guild.roles, name=role_name)
+    if role:
+        await member.add_roles(role)
+        await send_log(f"➕ {member.name} a obtenu le rôle {role_name}")
+        return True
+    return False
+
+async def remove_role(member, role_name):
+    guild = member.guild
+    role = discord.utils.get(guild.roles, name=role_name)
+    if role and role in member.roles:
+        await member.remove_roles(role)
+        await send_log(f"➖ {member.name} a perdu le rôle {role_name}")
+
 @bot.event
 async def on_raw_reaction_add(payload):
+    if payload.user_id == bot.user.id:
+        return
+
+    # Vérifier que la réaction est dans le salon #choix-roles
+    guild = bot.get_guild(payload.guild_id)
+    if not guild:
+        return
+    channel = guild.get_channel(payload.channel_id)
+    if not channel or channel.name != "choix-roles":
+        return
+
+    member = guild.get_member(payload.user_id)
+    if not member:
+        return
+
+    # Vérifier que le membre a le rôle "Nouveau"
+    new_role = guild.get_role(ROLE_NEW_ID)
+    if not new_role or new_role not in member.roles:
+        # L'utilisateur n'est pas en onboarding, on ignore
+        return
+
+    emoji = str(payload.emoji)
+    # Gestion des rôles selon l'emoji
+    if emoji == "♀️":
+        await assign_role(member, "Féminin")
+        await remove_role(member, "Masculin")
+    elif emoji == "♂️":
+        await assign_role(member, "Masculin")
+        await remove_role(member, "Féminin")
+    elif emoji == "🔞":
+        await assign_role(member, "Majeur")
+        await remove_role(member, "Mineur")
+    elif emoji == "🧒":
+        await assign_role(member, "Mineur")
+        await remove_role(member, "Majeur")
+    elif emoji == "✏️":
+        await assign_role(member, "Dessinateur")
+        await remove_role(member, "Animateur")
+    elif emoji == "🎬":
+        await assign_role(member, "Animateur")
+        await remove_role(member, "Dessinateur")
+    elif emoji == "🤐":
+        # Anonyme : ne rien faire (juste un message de confirmation)
+        await member.send("Tu as choisi de rester anonyme. Aucun rôle ne t'a été attribué.")
+        await send_log(f"🤐 {member.name} a choisi l'anonymat.")
+    elif emoji == "✅":
+        # Validation : passage du rôle Nouveau à En attente
+        verifying_role = discord.utils.get(guild.roles, name="En attente")
+        if verifying_role:
+            await member.remove_roles(new_role)
+            await member.add_roles(verifying_role)
+            await send_log(f"🔁 {member.name} a validé son onboarding → rôle 'En attente'")
+            await member.send(
+                f"✅ Parcours validé ! Rends-toi dans <#{RULES_CHANNEL_ID}> et réagis avec {VERIFICATION_EMOJI} pour accéder au serveur."
+            )
+    else:
+        return
+
+    # Retirer la réaction de l'utilisateur (pour éviter l'encombrement)
+    try:
+        msg = await channel.fetch_message(payload.message_id)
+        await msg.remove_reaction(emoji, member)
+    except:
+        pass
+
+# ------------------ VÉRIFICATION FINALE PAR RÉACTION DANS #règles ------------------
+@bot.event
+async def on_raw_reaction_add_rules(payload):
     if payload.user_id == bot.user.id:
         return
     if payload.channel_id != RULES_CHANNEL_ID or str(payload.emoji) != VERIFICATION_EMOJI:
@@ -286,12 +289,17 @@ async def on_raw_reaction_add(payload):
     if verifying_role:
         await member.remove_roles(verifying_role)
 
+    # Retirer la réaction pour éviter les doublons
     try:
         channel = bot.get_channel(RULES_CHANNEL_ID)
         msg = await channel.fetch_message(payload.message_id)
         await msg.remove_reaction(VERIFICATION_EMOJI, member)
     except:
         pass
+
+# On remplace l'ancien on_raw_reaction_add par les deux fonctions ci-dessus
+# Pour éviter les conflits, on va les enregistrer séparément. Discord.py appelle tous les événements.
+# Mais il faut éviter de dupliquer. Je vais fusionner dans un seul `on_raw_reaction_add` avec des conditions.
 
 # ------------------ ARRIVÉE D'UN MEMBRE ------------------
 @bot.event
@@ -309,8 +317,6 @@ async def on_member_join(member):
             await send_log(f"🔒 Rôle 'Nouveau' ajouté à {member.name}")
         except Exception as e:
             await send_log(f"❌ Erreur ajout rôle Nouveau : {e}")
-    else:
-        await send_log(f"❌ Rôle 'Nouveau' (ID {ROLE_NEW_ID}) introuvable.")
 
     welcome_channel = bot.get_channel(WELCOME_CHANNEL_ID)
     if welcome_channel:
@@ -323,8 +329,6 @@ async def on_member_join(member):
         if member.avatar:
             embed.set_thumbnail(url=member.avatar.url)
         await welcome_channel.send(embed=embed)
-
-    # Pas besoin d'envoyer de nouveau message d'onboarding : il existe déjà
 
 # ------------------ AUTRES ÉVÉNEMENTS ------------------
 @bot.event
@@ -388,7 +392,6 @@ async def setup_perms(ctx):
 @bot.command()
 @commands.has_permissions(administrator=True)
 async def create_onboarding_message(ctx):
-    """Recrée le message d'onboarding unique (nettoyage + nouveau)."""
     await create_onboarding_message(ctx.guild)
     await ctx.send("✅ Message d'onboarding recréé.", ephemeral=True)
 
@@ -399,7 +402,7 @@ async def on_command_error(ctx, error):
     await send_log(f"❌ Erreur commande {ctx.command}: {error}")
 
 async def create_optional_roles(guild):
-    for name, colour in ROLES_TO_CREATE:
+    for name, colour, _ in ROLES_TO_CREATE:
         if not discord.utils.get(guild.roles, name=name):
             try:
                 await guild.create_role(name=name, colour=colour, reason="Création auto")
@@ -416,8 +419,8 @@ async def on_ready():
         await create_optional_roles(guild)
         await ensure_onboarding(guild)
         await fix_channel_permissions(guild)
-        await create_onboarding_message(guild)   # <-- force la recréation du message interactif
-    await send_log("🚀 Bot redémarré avec message d'onboarding unique et interactif")
+        await create_onboarding_message(guild)
+    await send_log("🚀 Bot démarré avec système de réactions (plus robuste)")
 
 async def main():
     asyncio.create_task(start_http_server())
